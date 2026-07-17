@@ -1,6 +1,6 @@
 # Ownership
 
-Two-person split. Each person owns their files end-to-end; the other reviews via PR.
+Two-person split. Each person owns their files end-to-end; pushes to `main` are direct (no PR required).
 
 ## Person A — Itay · Data & Projection
 

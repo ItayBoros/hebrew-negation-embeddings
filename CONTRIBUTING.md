@@ -4,13 +4,12 @@ Two-person project. See OWNERSHIP.md for who owns what.
 
 ## Branch workflow
 
-- `main` is protected — no direct pushes. It should always run (`run_eval` on the FakeEmbedder + mock probe must not break).
-- Each person works on their own long-lived branch (names per PLAN.md):
+- Each person works on their own branch (names per PLAN.md):
   - Person A: `person-a`
   - Person B: `person-b`
-- Merge into `main` via pull request. Small, frequent PRs beat big ones.
-- Review rule: the **other** person reviews. For changes strictly inside your own files, a quick approval is fine; the review is mainly to keep both of us aware of the whole codebase.
-- Rebase your branch on `main` regularly (`git pull --rebase origin main`) to avoid drift.
+- Direct pushes to `main` are allowed — no PR required. PRs are optional; open one when you want the other person's eyes on a change.
+- Keep `main` green: before pushing to `main`, run `python -m src.harness.run_eval --models fake` and make sure it completes.
+- Pull before you push (`git pull --rebase origin main`) to avoid drift.
 
 ## Frozen contracts 🔒
 
