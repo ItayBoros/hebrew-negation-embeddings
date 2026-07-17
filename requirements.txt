@@ -1,0 +1,11 @@
+# Core
+numpy
+scipy
+pandas
+# Embedding models + NLI
+sentence-transformers
+transformers
+torch            # on Colab this is preinstalled; pin to the runtime's CUDA build
+scikit-learn     # for the logistic-regression negation direction (projection M2)
+# Plots / report
+matplotlib

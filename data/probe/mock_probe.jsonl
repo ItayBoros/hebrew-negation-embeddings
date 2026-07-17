@@ -1,0 +1,12 @@
+{"id": "m01", "target": "החתול ישן על הספה.", "paraphrase": "החתול נם על הספה.", "negation": "החתול לא ישן על הספה.", "source": "handwritten", "split": "train", "note": "particle negation"}
+{"id": "m02", "target": "המסעדה פתוחה בשבת.", "paraphrase": "המסעדה עובדת בשבת.", "negation": "המסעדה סגורה בשבת.", "source": "handwritten", "split": "train", "note": "antonym"}
+{"id": "m03", "target": "הרופא המליץ על הניתוח.", "paraphrase": "הרופא תמך בביצוע הניתוח.", "negation": "הרופא לא המליץ על הניתוח.", "source": "handwritten", "split": "train", "note": "particle negation"}
+{"id": "m04", "target": "התרופה מטפלת במחלה.", "paraphrase": "התרופה יעילה נגד המחלה.", "negation": "התרופה אינה מטפלת במחלה.", "source": "handwritten", "split": "train", "note": "אינה negation"}
+{"id": "m05", "target": "הילד אוהב את בית הספר.", "paraphrase": "הילד נהנה בבית הספר.", "negation": "הילד שונא את בית הספר.", "source": "handwritten", "split": "train", "note": "antonym"}
+{"id": "m06", "target": "החוק אושר בכנסת.", "paraphrase": "הכנסת אישרה את החוק.", "negation": "החוק נדחה בכנסת.", "source": "handwritten", "split": "train", "note": "antonym"}
+{"id": "m07", "target": "יש חלב במקרר.", "paraphrase": "נשאר חלב במקרר.", "negation": "אין חלב במקרר.", "source": "handwritten", "split": "test", "note": "יש/אין"}
+{"id": "m08", "target": "הפרויקט הצליח.", "paraphrase": "הפרויקט עלה יפה.", "negation": "הפרויקט נכשל.", "source": "handwritten", "split": "test", "note": "antonym"}
+{"id": "m09", "target": "היא הגיעה לפגישה.", "paraphrase": "היא הופיעה לפגישה.", "negation": "היא לא הגיעה לפגישה.", "source": "handwritten", "split": "test", "note": "particle negation"}
+{"id": "m10", "target": "הכביש פתוח לתנועה.", "paraphrase": "הכביש פנוי לנסיעה.", "negation": "הכביש חסום לתנועה.", "source": "handwritten", "split": "test", "note": "antonym"}
+{"id": "m11", "target": "המבחן היה קל.", "paraphrase": "המבחן היה פשוט.", "negation": "המבחן היה קשה.", "source": "handwritten", "split": "test", "note": "antonym"}
+{"id": "m12", "target": "הוא זוכר את השם.", "paraphrase": "הוא נזכר בשם.", "negation": "הוא לא זוכר את השם.", "source": "handwritten", "split": "test", "note": "particle negation"}

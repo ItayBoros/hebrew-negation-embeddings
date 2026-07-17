@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+env/
+# heavy artifacts live on Google Drive, not in git:
+*.pt
+*.bin
+*.safetensors
+checkpoints/
+# results: keep the small csv, ignore bulky dumps
+results/*.parquet
+results/plots/*.png
+# raw pulled corpora (HebNLI etc.) — regenerate, don't commit
+data/raw/
+# cached embedding dumps
+*.npy
+*.npz
+# model download caches
+.cache/
+hf_cache/
+.DS_Store
