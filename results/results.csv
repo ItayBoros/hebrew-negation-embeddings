@@ -1,0 +1,3 @@
+model,intervention,n_test,sim_paraphrase,sim_negation,cosine_gap,nevir_rank,sts_pearson,sts_spearman
+fake,baseline,6,0.043787747354700916,-0.025303865289093806,0.06909161264379472,0.5,,
+fake,projection,6,0.04602424271863862,-0.03653256466039074,0.08255680737902936,0.5,,
