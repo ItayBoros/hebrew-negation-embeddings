@@ -17,10 +17,9 @@ from typing import List
 import numpy as np
 
 # Registry of the four frozen base models from the proposal.
-# TODO(B): confirm the exact HF ids / SBERT wrappers you settle on.
 MODELS = {
-    "dictabert-sbert": "dicta-il/dictabert",           # wrap with mean-pooling / SBERT
-    "alephbert-sbert": "onlplab/alephbert-base",       # wrap with mean-pooling / SBERT
+    "sambert": "MPA/sambert",
+    "alephbert-sentence": "imvladikon/sentence-transformers-alephbert",
     "multilingual-e5": "intfloat/multilingual-e5-base",
     "labse":           "sentence-transformers/LaBSE",
 }
