@@ -5,6 +5,7 @@ Two-person split. Each person owns their files end-to-end; pushes to `main` are 
 ## Person A — Itay · Data & Projection
 
 - Negation probe: pull from HebNLI, filter to real negation, CONDAQA-style edits, annotation, train/test split
+- Probe construction pipeline (`src/data/`) and its offline check (`tests/`)
 - Projection intervention (`src/interventions/projection.py`)
 - Data files under `data/probe/`
 - Report sections: `report/sections/01_problem.md`, `02_related_work.md`, `03_dataset.md`
