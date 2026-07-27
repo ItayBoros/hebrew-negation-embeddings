@@ -63,12 +63,32 @@ python -m src.data.build_probe validate
 `results/probe_funnel.json` — those numbers go in the dataset section of the
 report.
 
+## The projection intervention
+
+Rescales the component along a learned "negation direction" rather than
+projecting it out — removing that direction would make a sentence and its
+negation *more* alike, which is the opposite of the goal.
+
+```bash
+# ablate the projection's own settings: direction × centring × γ selection
+python -m src.interventions.projection_report \
+    --models multilingual-e5 --probe data/probe/probe.jsonl --show-sweeps
+```
+
+γ is chosen by cross-validation inside the train split, never on test. See the
+module docstring in `src/interventions/projection.py` for the reasoning.
+
 ## Tests
 
 ```bash
-python -m tests.test_data_pipeline     # mine -> finalize -> validate, offline
-python -m src.data.negation --selftest # negation lexicon only
+python -m tests.test_data_pipeline      # mine -> finalize -> validate, offline
+python -m tests.test_projection         # projection, on a planted direction
+python -m src.data.negation --selftest  # negation lexicon only
 ```
+
+`tests/test_projection.py` builds a synthetic space with a *known* negation
+direction, so it can check that the method recovers it and widens the gap —
+something `FakeEmbedder` cannot tell you, since it is only noise.
 
 ## How it fits together
 - `src/schema.py` — the probe item format (shared contract).
