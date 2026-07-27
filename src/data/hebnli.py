@@ -15,13 +15,21 @@ Hebrew. Two facts about it drive the whole probe construction:
        paraphrase = the entailment sibling
        negation   = the contradiction sibling
 
-2. **Columns are inconsistent across the released files.** The parquet build of
-   `default/train` exposes `translation1` / `translation2` / `original_label`,
-   while some of the raw `HebNLI_*.jsonl` files use `hebrew_label` and other
-   spellings. Everything here goes through `ALIASES` so either shape loads.
+2. **Columns are inconsistent across the released files, and this breaks
+   `load_dataset`.** The released `HebNLI_*.jsonl` files do not share a schema —
+   one carries an extra `hebrew_label` column that another lacks. `datasets`
+   tries to unify all splits into one Arrow schema and dies:
 
-Access note: the repo card marks the dataset private, so `load_dataset` may need
-a token. Pass `--hf-token` or set `HF_TOKEN` in the environment.
+       datasets.table.CastError: Couldn't cast ... because column names don't match
+
+   (Same root cause as the dataset viewer's `ConfigNamesError` on the hub.)
+
+   So we do **not** go through `load_dataset`. We fetch one file with
+   `hf_hub_download` and parse it ourselves, which means no schema unification
+   happens at all and `ALIASES` below absorbs the naming differences.
+
+Access note: the repo card marks the dataset private, so downloads need a token.
+Pass `--hf-token` or set `HF_TOKEN` in the environment.
 
 Nothing in this module downloads anything at import time.
 """
@@ -35,6 +43,14 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 LABELS = ("entailment", "neutral", "contradiction")
+
+#: Some files carry `hebrew_label` with Hebrew strings instead of the English
+#: `original_label`. Map both onto the canonical three.
+LABEL_SYNONYMS = {
+    "entailment": "entailment", "גרירה": "entailment", "היסק": "entailment",
+    "contradiction": "contradiction", "סתירה": "contradiction",
+    "neutral": "neutral", "ניטרלי": "neutral", "נייטרלי": "neutral", "נטרלי": "neutral",
+}
 
 #: normalised field -> the column names seen in the wild, best first
 ALIASES: Dict[str, List[str]] = {
@@ -81,7 +97,8 @@ def normalise(record: dict) -> Optional[NLIRow]:
     (missing Hebrew text, or a label outside the three MultiNLI classes)."""
     premise = _pick(record, "premise_he")
     hypothesis = _pick(record, "hypothesis_he")
-    label = (_pick(record, "label") or "").strip().lower()
+    raw_label = (_pick(record, "label") or "").strip().lower()
+    label = LABEL_SYNONYMS.get(raw_label, "")
 
     if not premise or not hypothesis or label not in LABELS:
         return None
@@ -133,25 +150,58 @@ def load_jsonl(path: str | Path) -> List[NLIRow]:
     return _from_records(_records())
 
 
+#: Split name -> the file that actually holds it in the hub repo. Downloading a
+#: single file sidesteps the cross-split schema clash described at the top.
+SPLIT_FILES = {
+    "train":      "HebNLI_train.jsonl",
+    "val":        "HebNLI_val.jsonl",
+    "validation": "HebNLI_val.jsonl",
+    "test":       "HebNLI_test.jsonl",
+    "all":        "heb_nli.jsonl",
+    "sample":     "HebNLI_sampled_2000_v2.jsonl",
+}
+
+
 def load_hf(
     dataset: str = "HebArabNlpProject/HebNLI",
     split: str = "train",
     token: Optional[str] = None,
+    filename: Optional[str] = None,
 ) -> List[NLIRow]:
-    """Load from the Hugging Face hub. Imported lazily so the rest of this
-    module works in an environment with no `datasets` installed."""
-    from datasets import load_dataset  # lazy
+    """Download one file from the hub and parse it here.
 
-    token = token or os.environ.get("HF_TOKEN")
-    ds = load_dataset(dataset, split=split, token=token)
-    return _from_records(ds)
+    Deliberately not `load_dataset`: it unifies the schemas of all splits and
+    raises `CastError` on this dataset, because the released files disagree on
+    which columns exist. `hf_hub_download` fetches exactly one file, so there is
+    nothing to unify. Imports are lazy so this module stays importable without
+    `huggingface_hub` installed.
+    """
+    from huggingface_hub import hf_hub_download  # lazy
+
+    if filename is None:
+        if split not in SPLIT_FILES:
+            raise KeyError(f"unknown split '{split}'. options: {sorted(SPLIT_FILES)}")
+        filename = SPLIT_FILES[split]
+
+    path = hf_hub_download(
+        repo_id=dataset,
+        filename=filename,
+        repo_type="dataset",
+        token=token or os.environ.get("HF_TOKEN"),
+    )
+    return load_jsonl(path)
 
 
-def load(source: str, split: str = "train", token: Optional[str] = None) -> List[NLIRow]:
+def load(
+    source: str,
+    split: str = "train",
+    token: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> List[NLIRow]:
     """`source` is either a path to a local .jsonl or a Hugging Face dataset id."""
     if Path(source).exists():
         return load_jsonl(source)
-    return load_hf(source, split=split, token=token)
+    return load_hf(source, split=split, token=token, filename=filename)
 
 
 def group_by_prompt(rows: Iterable[NLIRow]) -> Dict[str, Dict[str, NLIRow]]:
@@ -189,12 +239,14 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description="download and normalise HebNLI")
     ap.add_argument("--source", default="HebArabNlpProject/HebNLI")
-    ap.add_argument("--split", default="train")
+    ap.add_argument("--split", default="train", choices=sorted(SPLIT_FILES))
+    ap.add_argument("--file", default=None,
+                    help="fetch this file from the repo instead of the split default")
     ap.add_argument("--out", default="data/raw/hebnli_train.jsonl")
     ap.add_argument("--hf-token", default=None)
     args = ap.parse_args()
 
-    rows = load(args.source, split=args.split, token=args.hf_token)
+    rows = load(args.source, split=args.split, token=args.hf_token, filename=args.file)
     grouped = group_by_prompt(rows)
     complete = sum(1 for g in grouped.values() if len(g) == 3)
     n = dump_jsonl(rows, args.out)
