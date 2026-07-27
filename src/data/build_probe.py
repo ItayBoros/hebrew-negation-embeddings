@@ -53,7 +53,7 @@ from typing import Dict, List, Optional, Sequence
 
 from ..schema import ProbeItem, save_probe, load_probe
 from . import hebnli
-from .negation import added_negation, find_markers, overlap, tokenize
+from .negation import added_negation, find_markers, overlap, same_sentence, tokenize
 
 REVIEW_FIELDS = [
     "id", "keep", "target", "paraphrase", "negation",
@@ -96,6 +96,7 @@ def mine(
     rows: List[hebnli.NLIRow],
     min_containment: float = 0.6,
     min_len_ratio: float = 0.5,
+    max_added_tokens: int = 2,
     min_tokens: int = 4,
     max_tokens: int = 30,
     include_weak: bool = False,
@@ -125,14 +126,23 @@ def mine(
         funnel.hit("negation_added")
 
         ov = overlap(target, negation)
-        if ov["containment"] < min_containment or ov["len_ratio"] < min_len_ratio:
+        if (
+            ov["containment"] < min_containment
+            or ov["len_ratio"] < min_len_ratio
+            or ov["added"] > max_added_tokens
+        ):
             continue
         funnel.hit("minimal_edit")
 
+        # A paraphrase is only usable if it is not itself negated *and* is not a
+        # verbatim copy of the target — HebNLI's entailment hypothesis often is
+        # one, and target == paraphrase makes the item measure nothing.
         entailment = siblings.get("entailment")
         paraphrase, para_containment = "", 0.0
-        if entailment is not None and not added_negation(
-            target, entailment.hypothesis_he, include_weak=include_weak
+        if (
+            entailment is not None
+            and not same_sentence(target, entailment.hypothesis_he)
+            and not added_negation(target, entailment.hypothesis_he, include_weak=include_weak)
         ):
             paraphrase = entailment.hypothesis_he
             para_containment = overlap(target, paraphrase)["containment"]
@@ -277,6 +287,7 @@ def cmd_mine(args) -> int:
         rows,
         min_containment=args.min_containment,
         min_len_ratio=args.min_len_ratio,
+        max_added_tokens=args.max_added_tokens,
         min_tokens=args.min_tokens,
         max_tokens=args.max_tokens,
         include_weak=args.include_weak,
@@ -302,6 +313,7 @@ def cmd_mine(args) -> int:
             "params": {
                 "min_containment": args.min_containment,
                 "min_len_ratio": args.min_len_ratio,
+                "max_added_tokens": args.max_added_tokens,
                 "min_tokens": args.min_tokens, "max_tokens": args.max_tokens,
                 "include_weak": args.include_weak,
             },
@@ -372,6 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--limit", type=int, default=0, help="keep only the top N candidates")
     m.add_argument("--min-containment", type=float, default=0.6)
     m.add_argument("--min-len-ratio", type=float, default=0.5)
+    m.add_argument("--max-added-tokens", type=int, default=2,
+                   help="content words the negation may add beyond the target's")
     m.add_argument("--min-tokens", type=int, default=4)
     m.add_argument("--max-tokens", type=int, default=30)
     m.add_argument("--include-weak", action="store_true",

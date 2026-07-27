@@ -263,18 +263,35 @@ def overlap(premise: str, hypothesis: str) -> dict:
     hypothesis. High containment plus an added negation marker is the signature
     of a genuine minimal negation edit; low containment means the hypothesis was
     rewritten and the opposition may come from somewhere else entirely.
+
+    ``added`` — content words the hypothesis introduces. Containment alone does
+    not catch a hypothesis that keeps every original word and then piles more on
+    top ("מי טעה לגבי קוסובו" -> "אני לא מעוניין לדעת מי טעה לגבי קוסובו"):
+    containment is a perfect 1.0, but the opposition is no longer a polarity
+    flip. Capping ``added`` is what rejects those.
     """
     a = _content_tokens(premise)
     b = _content_tokens(hypothesis)
     sa, sb = set(a), set(b)
     if not sa or not sb:
-        return {"containment": 0.0, "jaccard": 0.0, "len_ratio": 0.0}
+        return {"containment": 0.0, "jaccard": 0.0, "len_ratio": 0.0, "added": len(sb)}
     inter = len(sa & sb)
     return {
         "containment": inter / len(sa),
         "jaccard": inter / len(sa | sb),
         "len_ratio": min(len(a), len(b)) / max(len(a), len(b)),
+        "added": len(sb - sa),
     }
+
+
+def same_sentence(a: str, b: str) -> bool:
+    """True if the two differ only by punctuation, whitespace or niqqud.
+
+    HebNLI's entailment hypothesis is quite often a verbatim copy of the
+    premise. That is a fine entailment and a useless paraphrase — a probe item
+    whose target and paraphrase are the same string measures nothing.
+    """
+    return tokenize(a) == tokenize(b)
 
 
 # --------------------------------------------------------------------------

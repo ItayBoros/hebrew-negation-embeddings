@@ -21,6 +21,13 @@ happy path. Each prompt id below is there for a reason:
   2005  entailment sibling is itself negated        -> keep, paraphrase blanked
   2006  quantifier (אף אחד לא)                      -> keep
   2007  premise already negated (ללא), no new marker -> drop
+  2008  negation keeps every word and adds four more -> drop  (containment 1.0
+        but not a polarity flip: "מי טעה לגבי קוסובו" ->
+        "אני לא מעוניין לדעת מי טעה לגבי קוסובו")
+  2009  entailment sibling is a verbatim copy       -> keep, paraphrase blanked
+
+2008 and 2009 come from real HebNLI output, not imagination — both patterns
+showed up in the first live mining run over the 300k-row train split.
 """
 from __future__ import annotations
 
@@ -39,8 +46,9 @@ from src.schema import load_probe, save_probe
 
 FIXTURE = Path(__file__).parent / "fixtures" / "hebnli_sample.jsonl"
 
-EXPECTED_KEPT = {"hn1001", "hn1002", "hn1003", "hn1004", "hn2005", "hn2006"}
-EXPECTED_DROPPED = {"hn2001", "hn2002", "hn2003", "hn2004", "hn2007"}
+EXPECTED_KEPT = {"hn1001", "hn1002", "hn1003", "hn1004", "hn2005", "hn2006", "hn2009"}
+EXPECTED_DROPPED = {"hn2001", "hn2002", "hn2003", "hn2004", "hn2007", "hn2008"}
+NEEDS_PARAPHRASE = {"hn2005", "hn2009"}
 
 
 def check(condition: bool, message: str, failures: list) -> None:
@@ -58,9 +66,9 @@ def main() -> int:
 
     print("\n== load fixture ==")
     rows = hebnli.load(str(FIXTURE))
-    check(len(rows) == 19, f"expected 19 rows, got {len(rows)}", failures)
+    check(len(rows) == 22, f"expected 22 rows, got {len(rows)}", failures)
     grouped = hebnli.group_by_prompt(rows)
-    check(len(grouped) == 11, f"expected 11 prompts, got {len(grouped)}", failures)
+    check(len(grouped) == 13, f"expected 13 prompts, got {len(grouped)}", failures)
     check(
         grouped["1001"]["contradiction"].premise_he == grouped["1001"]["entailment"].premise_he,
         "siblings of one promptID should share a premise",
@@ -76,8 +84,9 @@ def main() -> int:
         "a candidate that should have been filtered out survived",
         failures,
     )
-    blank = [c["id"] for c in candidates if not c["paraphrase"]]
-    check(blank == ["hn2005"], f"expected only hn2005 to need a paraphrase, got {blank}", failures)
+    blank = {c["id"] for c in candidates if not c["paraphrase"]}
+    check(blank == NEEDS_PARAPHRASE,
+          f"expected {sorted(NEEDS_PARAPHRASE)} to need a paraphrase, got {sorted(blank)}", failures)
     print(funnel.report(STAGES))
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -90,10 +99,14 @@ def main() -> int:
 
         print("\n== simulate the human pass ==")
         reviewed = read_review(review)
+        hand_written = {
+            "hn2005": "הכביש פנוי לנסיעה הבוקר.",
+            "hn2009": "היקף שירות הדואר נתון לערעור.",
+        }
         for r in reviewed:
             r["keep"] = "y"
-            if r["id"] == "hn2005":
-                r["paraphrase"] = "הכביש פנוי לנסיעה הבוקר."
+            if r["id"] in hand_written:
+                r["paraphrase"] = hand_written[r["id"]]
         # rows a careless annotator might produce
         reviewed.append({**reviewed[0], "id": "hnNOMARK",
                          "negation": "הרופא המליץ בחום על הניתוח למטופל."})
@@ -109,7 +122,7 @@ def main() -> int:
 
         print("\n== finalize ==")
         items = to_probe_items(good, test_size=0.5, seed=17, source="hebnli")
-        check(len(items) == 6, f"expected 6 probe items, got {len(items)}", failures)
+        check(len(items) == 7, f"expected 7 probe items, got {len(items)}", failures)
         check(
             all(it.split in ("train", "test") for it in items),
             "every item needs a train/test split",
