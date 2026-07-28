@@ -6,6 +6,8 @@
 | `splits/train.jsonl`, `splits/test.jsonl` | 152 / 151, stratified by negation type |
 | `review_done.csv` | every one of the 689 mined candidates with its keep/reject decision and a reason |
 | `heldout_prompt_ids.txt` | HebNLI promptIDs that must not appear in NLI fine-tuning — read below |
+| `review_raw.csv` | the 689 candidates as mined, before any decisions — kept so the agreement sample is reproducible |
+| `agreement/` | inter-annotator agreement materials, see below |
 | `mock_probe.jsonl` | 12 hand-written items, plumbing fixture only |
 
 Each item is a triple: a `target`, a `paraphrase` that means the same thing in
@@ -45,6 +47,33 @@ Two side benefits of retraining rather than reusing the checkpoint: the released
 one was fine-tuned partly on [LCHAIM](https://aclanthology.org/2025.findings-acl.413/),
 whose premises are long paragraphs while our targets have a median of 6 tokens;
 and its model card is empty, which is awkward to cite.
+
+## Inter-annotator agreement
+
+The probe encodes one judgement applied 689 times. The agreement number is the
+evidence that the judgement is reproducible rather than one person's taste.
+
+```bash
+# already generated: 40 rows, seed 7, drawn at random from review_raw.csv
+python -m src.data.agreement sample --review data/probe/review_raw.csv
+
+# both annotators read GUIDELINES.md, fill only `keep` in their own file,
+# and do not compare notes until both are done. Then:
+python -m src.data.agreement score \
+    data/probe/agreement/sample_itay.csv \
+    data/probe/agreement/sample_shachar.csv
+```
+
+Sampled at random, not from the top of the file — `review.csv` is sorted by
+containment descending, so the first rows are the easy ones and sampling them
+would inflate agreement. The drawn 40 span containment 0.6 to 1.0.
+
+Report **Cohen's kappa**, not raw agreement: 56% of candidates are rejects, so
+two annotators who both reject often agree roughly half the time by luck alone.
+Kappa subtracts that baseline.
+
+`sample` refuses to run on a file that already has decisions in it — an
+annotator who sees existing labels is agreeing, not annotating.
 
 ## How the probe was built
 
