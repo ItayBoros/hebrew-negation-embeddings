@@ -137,6 +137,11 @@ slides, and the 5-minute video.
   noisy ones. Paraphrase must preserve meaning; negation must flip it; nothing
   else in the sentence changes.
 - **Keep two headline metrics visible:** the cosine gap and the Hebrew
-  NevIR-style rank (chance = 0.25). STS is the trade-off guard, not a headline.
+  pairwise accuracy (chance = 0.5). STS is the trade-off guard, not a headline.
+  **Correction to the original plan:** the second headline was specified as a
+  NevIR-style rank with chance 0.25. That is not computable from a triple — see
+  `metrics.pairwise_accuracy`. Either add a fourth sentence per item (a
+  paraphrase of the negation, which touches the frozen schema) or state in the
+  report that the pairwise version is what we measure. A/B decision.
 - **Lock scope:** two interventions run to the end beat four half-finished ones.
   Contrastive tuning is a stretch, only if time remains.

@@ -9,8 +9,15 @@ need no retraining of the base model.
 Two headline metrics:
 - **Cosine gap** — `mean cos(target, paraphrase) − mean cos(target, negation)`.
   A negation-aware model has a large gap.
-- **Hebrew NevIR-style rank** — right-rank accuracy on contrasting query/doc
-  pairs (chance = 0.25).
+- **Pairwise accuracy** — share of items where the paraphrase is ranked closer
+  than the negation (chance = 0.5).
+
+  This was originally specified as a NevIR-style rank with chance 0.25. It is not
+  computable from a triple: NevIR needs two queries each with its own relevant
+  document, and three sentences give only three distinct pairings. Getting the
+  real thing needs a fourth sentence per item — a paraphrase of the negation.
+  `metrics.nevir_rank_full` implements it and takes that sentence externally, so
+  the frozen schema does not have to move until we decide to build them.
 
 STS correlation is tracked as a **trade-off guard**: a fix that repairs negation
 but wrecks ordinary similarity is not useful.
