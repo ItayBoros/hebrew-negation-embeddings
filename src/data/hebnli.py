@@ -204,6 +204,35 @@ def load(
     return load_hf(source, split=split, token=token, filename=filename)
 
 
+#: promptIDs that must not appear in NLI fine-tuning data. See the header of
+#: the file itself for the reasoning.
+HELDOUT_IDS_PATH = Path(__file__).resolve().parents[2] / "data" / "probe" / "heldout_prompt_ids.txt"
+
+
+def load_heldout_prompt_ids(path: str | Path | None = None) -> set:
+    """promptIDs to drop before fine-tuning an NLI model on HebNLI.
+
+    The probe was mined from HebNLI *train*, so a model fine-tuned on HebNLI has
+    already seen our (target, negation) pairs labelled `contradiction`. Scoring
+    `nli_rerank` with such a model measures memorisation. Drop these first.
+    """
+    path = Path(path or HELDOUT_IDS_PATH)
+    ids = set()
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                ids.add(line)
+    return ids
+
+
+def drop_prompts(rows: Iterable[NLIRow], prompt_ids: set) -> List[NLIRow]:
+    """Remove every row whose promptID is held out — all three siblings, not
+    just the contradiction one. Dropping only the contradiction pair would
+    still leave the model trained on our target sentence as a premise."""
+    return [r for r in rows if r.prompt_id not in prompt_ids]
+
+
 def group_by_prompt(rows: Iterable[NLIRow]) -> Dict[str, Dict[str, NLIRow]]:
     """`{prompt_id: {label: row}}`.
 
