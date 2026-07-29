@@ -34,8 +34,11 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import random
 from pathlib import Path
 from typing import List
+
+import numpy as np
 
 from ..harness.metrics import cosine_gap, nevir_rank
 from ..harness.models import get_embedder
@@ -46,7 +49,41 @@ from .projection import DIRECTION_METHODS, NegationProjection
 FIELDS = [
     "model", "config", "direction", "center", "select", "gamma", "at_grid_edge",
     "n_train", "n_test", "sim_paraphrase", "sim_negation", "cosine_gap", "nevir_rank",
+    "sim_unrelated",
 ]
+
+
+def unrelated_similarity(
+    items: List[ProbeItem],
+    score_fn,
+    n_pairs: int = 400,
+    seed: int = 0,
+) -> float:
+    """Mean |cos| between the targets of two *different* probe items.
+
+    A stand-in trade-off guard until a Hebrew STS set exists. Two unrelated
+    sentences should sit near zero; in a healthy space this stays low no matter
+    what the intervention does to negation.
+
+    It is what catches the failure mode `cosine_gap` cannot see. Amplifying γ
+    without bound eventually projects every sentence onto `direction`, at which
+    point cos between *any* two sentences goes to ±1 — the negation gap looks
+    magnificent because the representation has been flattened to one axis and
+    everything else is gone. A large gap next to a large `sim_unrelated` is that
+    collapse, not a fix.
+
+    Not a replacement for STS: it says nothing about whether *graded* similarity
+    survives, only whether unrelated things stay unrelated.
+    """
+    rng = random.Random(seed)
+    targets = [it.target for it in items]
+    if len(targets) < 2:
+        return float("nan")
+    vals = []
+    for _ in range(n_pairs):
+        a, b = rng.sample(targets, 2)
+        vals.append(abs(score_fn(a, b)))
+    return float(np.mean(vals))
 
 
 def evaluate_config(
@@ -69,6 +106,7 @@ def evaluate_config(
         "at_grid_edge": proj.at_grid_edge,
         **cosine_gap(test, score_fn),
         "nevir_rank": nevir_rank(test, score_fn),
+        "sim_unrelated": unrelated_similarity(test, score_fn),
         "_sweep": proj.sweep_table(),
     }
 
@@ -99,6 +137,7 @@ def main() -> int:
             "select": "", "gamma": "", "at_grid_edge": "",
             "n_train": len(train), "n_test": len(test),
             **cosine_gap(test, base_fn), "nevir_rank": nevir_rank(test, base_fn),
+            "sim_unrelated": unrelated_similarity(test, base_fn),
         })
 
         for direction, center, select in itertools.product(
@@ -115,7 +154,8 @@ def main() -> int:
             if args.show_sweeps:
                 print(f"\n{model_key} / {result['config']}\n{sweep}")
 
-    header = f"\n{'model':<16} {'config':<28} {'γ':>5} {'para':>7} {'neg':>7} {'gap':>8} {'nevir':>6}"
+    header = (f"\n{'model':<16} {'config':<28} {'γ':>5} {'para':>7} {'neg':>7} "
+              f"{'gap':>8} {'pair':>6} {'unrel':>7}")
     print(header)
     print("-" * len(header))
     for r in rows:
@@ -123,7 +163,11 @@ def main() -> int:
         flag = " *" if r.get("at_grid_edge") else ""
         print(f"{r['model']:<16} {r['config']:<28} {gamma:>5} "
               f"{r['sim_paraphrase']:>7.3f} {r['sim_negation']:>7.3f} "
-              f"{r['cosine_gap']:>+8.4f} {r['nevir_rank']:>6.2f}{flag}")
+              f"{r['cosine_gap']:>+8.4f} {r['nevir_rank']:>6.2f} "
+              f"{r['sim_unrelated']:>7.3f}{flag}")
+    print("\nunrel = mean |cos| between targets of different items. It should stay")
+    print("low. A big gap next to a big unrel is the space collapsing onto one axis,")
+    print("not a working fix — see unrelated_similarity().")
     if any(r.get("at_grid_edge") for r in rows):
         print("\n* γ hit the top of the sweep grid — the grid picked it, not the data. "
               "Widen DEFAULT_SCALE_GRID and check what STS does there before reporting.")

@@ -71,7 +71,18 @@ from .baseline import cosine
 
 #: γ values tried during fit. Starts at the identity so the sweep can always
 #: fall back to "do nothing" if amplification does not help.
-DEFAULT_SCALE_GRID: Tuple[float, ...] = (1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 50.0)
+#:
+#: Widened after the first real-model run, where every one of the 32
+#: configurations picked the old ceiling of 50 — the grid was choosing, not the
+#: data. Roughly log-spaced to 1000 so the sweep can show where the gap actually
+#: stops rising. Expect it to keep rising: as γ grows every vector collapses onto
+#: `direction`, which maximises the gap while destroying everything else in the
+#: representation. That is why `at_grid_edge` alone is not enough of a guard and
+#: the STS trade-off number is what decides which γ is usable.
+DEFAULT_SCALE_GRID: Tuple[float, ...] = (
+    1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 50.0,
+    80.0, 120.0, 200.0, 350.0, 600.0, 1000.0,
+)
 
 DIRECTION_METHODS = ("mean_diff", "classifier")
 
