@@ -224,8 +224,8 @@ def main() -> int:
     crossval = NegationProjection(select="cv", n_folds=5)
     crossval.fit(thin, weak)
 
-    naive_best = max(g for _, g in naive.sweep)
-    cv_best = max(g for _, g in crossval.sweep)
+    naive_best = max(g for _, g, _u in naive.sweep)
+    cv_best = max(g for _, g, _u in crossval.sweep)
     print(f"  select=train  best reported gap {naive_best:+.4f}")
     print(f"  select=cv5    best reported gap {cv_best:+.4f}")
     check(naive_best > cv_best,
@@ -260,6 +260,43 @@ def main() -> int:
     g_u = gap(test, lambda a, b: uncentred.score(a, b, emb))
     print(f"  centred {g_c:+.4f}   uncentred {g_u:+.4f}")
     check(g_c >= g_u, f"centring should not hurt ({g_c:.4f} vs {g_u:.4f})", failures)
+
+    print("\n== unrel-constrained γ selection ==")
+    # Unconstrained selection on the planted space amplifies until it collapses:
+    # every target starts looking like every other target. Constraining unrel
+    # should pick a smaller γ, and that γ's own held-out unrel should respect
+    # the threshold — the same failure mode the real-model run surfaced.
+    emb = PlantedEmbedder()
+    unconstrained = NegationProjection(direction_method="mean_diff")
+    unconstrained.fit(train, emb)
+    unconstrained_unrel = {g: u for g, _, u in unconstrained.sweep}[unconstrained.scale]
+    print(f"  unconstrained: γ={unconstrained.scale:g}  unrel={unconstrained_unrel:.3f}")
+    check(unconstrained_unrel > 0.5,
+          f"expected the unconstrained pick to collapse unrel on this planted space, got {unconstrained_unrel:.3f}",
+          failures)
+
+    emb = PlantedEmbedder()
+    constrained = NegationProjection(direction_method="mean_diff", constrain_unrel=True, unrel_threshold=0.5)
+    constrained.fit(train, emb)
+    constrained_unrel = {g: u for g, _, u in constrained.sweep}[constrained.scale]
+    print(f"  constrained:   γ={constrained.scale:g}  unrel={constrained_unrel:.3f}")
+    check(constrained.scale < unconstrained.scale,
+          f"constrained γ should be smaller than unconstrained ({constrained.scale:g} vs {unconstrained.scale:g})",
+          failures)
+    check(constrained_unrel <= 0.5 + 1e-9,
+          f"constrained pick should respect the threshold, got unrel={constrained_unrel:.3f}",
+          failures)
+    check(not constrained.constraint_relaxed, "threshold=0.5 should be satisfiable here", failures)
+
+    # An unreachable threshold must fall back to the safest γ (lowest unrel in
+    # the grid) rather than silently violating the constraint, and must flag it.
+    emb = PlantedEmbedder()
+    impossible = NegationProjection(direction_method="mean_diff", constrain_unrel=True, unrel_threshold=1e-6)
+    impossible.fit(train, emb)
+    print(f"  impossible threshold: γ={impossible.scale:g}  relaxed={impossible.constraint_relaxed}")
+    check(impossible.constraint_relaxed, "an unreachable threshold should set constraint_relaxed", failures)
+    check(impossible.scale == min(impossible.sweep, key=lambda t: t[2])[0],
+          "fallback should be the lowest-unrel γ in the grid", failures)
 
     print()
     if failures:

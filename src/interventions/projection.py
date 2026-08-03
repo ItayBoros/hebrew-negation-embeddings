@@ -57,10 +57,35 @@ an embedder that raises if it is ever shown a test sentence.
 
 The trade-off to watch: a γ large enough to open the negation gap also distorts
 ordinary similarity, so `sts_corr` in the harness is the guard. Report both.
+
+Why gap-only selection had to be replaced
+------------------------------------------
+The first version of `fit` picked whichever γ maximised the gap, full stop.
+Run against real models (sambert, alephbert-sentence, LaBSE) with the widened
+grid above, it always won by amplifying until the space collapsed: at the
+chosen γ, `unrelated_similarity` (see `projection_report.py`) — the mean |cos|
+between the targets of two *different*, topically unrelated items — shot from
+a healthy ~0.25-0.45 up to 0.87-0.996. That means almost every sentence had
+become nearly parallel to `direction`. The gap "opened" because everything
+else in the representation was erased, not because the model learned to tell
+paraphrase from negation. Cross-validation did not save this: CV protects
+against overfitting the metric you are optimising, but collapse raises the
+gap on *every* fold, held-out or not, so CV consistently picked an even higher
+γ than plain train-selection did.
+
+So `fit` now supports `constrain_unrel=True`: instead of the argmax over gap,
+it takes the argmax over gap **among the γ whose unrel stays at or below
+`unrel_threshold`**, using the same train-only CV folds (never the test
+split — the guardrail is unchanged). If no γ in the grid satisfies the
+threshold, it falls back to the γ with the *lowest* unrel in the grid (γ=1,
+the identity, is always in `scale_grid`, so this can never be worse than
+doing nothing) and sets `constraint_relaxed = True` so the report can flag it
+rather than silently reporting a number nobody would stand behind.
 """
 from __future__ import annotations
 
 import hashlib
+import random
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -111,10 +136,21 @@ class NegationProjection(Intervention):
         select: str = "cv",
         n_folds: int = 5,
         seed: int = 0,
+        constrain_unrel: bool = False,
+        unrel_threshold: float = 0.5,
+        unrel_pairs: int = 200,
     ):
         """`scale=None` sweeps `scale_grid` and picks γ by `select`
         (`"cv"` = cross-validation inside train, `"train"` = the whole train
-        split). Passing an explicit `scale` pins it and skips the sweep."""
+        split). Passing an explicit `scale` pins it and skips the sweep.
+
+        `constrain_unrel` switches the sweep's selection rule from "maximise
+        the gap" to "maximise the gap among γ whose unrelated-similarity
+        stays ≤ `unrel_threshold`" (see the module docstring for why the
+        unconstrained version is unsafe). `unrel_pairs` is the number of
+        random unrelated-item pairs sampled per γ per fold to estimate that
+        quantity — selection signal only, computed on train, same as the gap.
+        """
         if direction_method not in DIRECTION_METHODS:
             raise ValueError(f"direction_method must be one of {DIRECTION_METHODS}")
         if select not in ("cv", "train"):
@@ -127,12 +163,19 @@ class NegationProjection(Intervention):
         self.select = select
         self.n_folds = n_folds
         self.seed = seed
+        self.constrain_unrel = constrain_unrel
+        self.unrel_threshold = unrel_threshold
+        self.unrel_pairs = unrel_pairs
         self.selection = "pinned"
 
         self.direction: Optional[np.ndarray] = None
         self.mu: float = 0.0
-        self.sweep: List[Tuple[float, float]] = []   # (γ, train gap) — for the report
+        #: (γ, train/held-out gap, train/held-out unrel) — for the report.
+        #: unrel is always computed (cheap), even when constrain_unrel=False,
+        #: so a switch to constrained selection never needs a re-run to see it.
+        self.sweep: List[Tuple[float, float, float]] = []
         self.at_grid_edge: bool = False
+        self.constraint_relaxed: bool = False
         self._cache: Dict[str, np.ndarray] = {}
         self._cache_key: object = None
 
@@ -253,15 +296,36 @@ class NegationProjection(Intervention):
                 self.selection = f"cv{self.n_folds}"
             else:
                 self.sweep = [
-                    (float(g), self._gap(train_items, embedder, self.direction, self.mu, float(g)))
+                    (
+                        float(g),
+                        self._gap(train_items, embedder, self.direction, self.mu, float(g)),
+                        self._unrel(train_items, embedder, self.direction, self.mu, float(g)),
+                    )
                     for g in self.scale_grid
                 ]
                 self.selection = "train"
-            self.scale = max(self.sweep, key=lambda pair: pair[1])[0]
-            # The gap grows monotonically in γ for a while, so the argmax landing
-            # on the largest value tried means the grid, not the data, chose it.
-            # Worth surfacing rather than quietly reporting a boundary value.
+            self.scale, self.constraint_relaxed = self._select_gamma(self.sweep)
+            # The gap grows monotonically in γ for a while, so an unconstrained
+            # argmax landing on the largest value tried means the grid, not the
+            # data, chose it. Worth surfacing rather than quietly reporting a
+            # boundary value.
             self.at_grid_edge = self.scale == max(self.scale_grid)
+
+    def _select_gamma(self, sweep: List[Tuple[float, float, float]]) -> Tuple[float, bool]:
+        """Pick γ from `sweep` = [(γ, gap, unrel), ...].
+
+        Unconstrained: argmax gap, exactly the original behaviour.
+        Constrained: argmax gap among entries with unrel ≤ `unrel_threshold`.
+        If none satisfy it, fall back to the entry with the lowest unrel — the
+        safest point in the grid — and report that the constraint was relaxed
+        rather than silently returning a collapsed configuration.
+        """
+        if not self.constrain_unrel:
+            return max(sweep, key=lambda t: t[1])[0], False
+        feasible = [t for t in sweep if t[2] <= self.unrel_threshold]
+        if feasible:
+            return max(feasible, key=lambda t: t[1])[0], False
+        return min(sweep, key=lambda t: t[2])[0], True
 
     def _folds(self, items: List[ProbeItem]) -> List[List[int]]:
         """Deterministic K folds — same items always give the same folds, so a
@@ -272,8 +336,9 @@ class NegationProjection(Intervention):
         )
         return [order[k::self.n_folds] for k in range(self.n_folds)]
 
-    def _sweep_cv(self, items: List[ProbeItem], embedder) -> List[Tuple[float, float]]:
-        totals = {float(g): 0.0 for g in self.scale_grid}
+    def _sweep_cv(self, items: List[ProbeItem], embedder) -> List[Tuple[float, float, float]]:
+        gap_totals = {float(g): 0.0 for g in self.scale_grid}
+        unrel_totals = {float(g): 0.0 for g in self.scale_grid}
         folds = self._folds(items)
         used = 0
         for fold in folds:
@@ -283,9 +348,11 @@ class NegationProjection(Intervention):
                 continue
             direction, mu = self._fit_direction(rest, embedder)
             for g in self.scale_grid:
-                totals[float(g)] += self._gap(held_out, embedder, direction, mu, float(g))
+                gap_totals[float(g)] += self._gap(held_out, embedder, direction, mu, float(g))
+                unrel_totals[float(g)] += self._unrel(held_out, embedder, direction, mu, float(g))
             used += 1
-        return [(g, total / max(used, 1)) for g, total in totals.items()]
+        used = max(used, 1)
+        return [(g, gap_totals[g] / used, unrel_totals[g] / used) for g in gap_totals]
 
     def _gap(
         self,
@@ -304,6 +371,32 @@ class NegationProjection(Intervention):
         sim_para = np.mean([cosine(a, b) for a, b in zip(t, p)])
         sim_neg = np.mean([cosine(a, b) for a, b in zip(t, n)])
         return float(sim_para - sim_neg)
+
+    def _unrel(
+        self,
+        items: List[ProbeItem],
+        embedder,
+        direction: np.ndarray,
+        mu: float,
+        scale: float,
+    ) -> float:
+        """Mean |cos| between the targets of two *different* items under a
+        given (direction, μ, γ) — the collapse guard, computed train-side only
+        during selection. Mirrors `unrelated_similarity` in
+        `projection_report.py`, which reports the same quantity on the test
+        split for the final chosen γ; this one is selection signal, never
+        reported directly, same status as `_gap`.
+        """
+        if len(items) < 2:
+            return float("nan")
+        t = _rescale(self._encode([it.target for it in items], embedder), direction, mu, scale)
+        rng = random.Random(self.seed)
+        idx = list(range(len(items)))
+        vals = []
+        for _ in range(self.unrel_pairs):
+            i, j = rng.sample(idx, 2)
+            vals.append(abs(cosine(t[i], t[j])))
+        return float(np.mean(vals))
 
     # -- transform + score -------------------------------------------------
 
@@ -324,14 +417,24 @@ class NegationProjection(Intervention):
         if self.direction is None:
             return "projection (unfitted)"
         edge = ", AT GRID EDGE" if self.at_grid_edge else ""
+        constraint = f", unrel<={self.unrel_threshold:g}" if self.constrain_unrel else ""
+        relaxed = ", CONSTRAINT RELAXED (no γ satisfied it)" if self.constraint_relaxed else ""
         return (f"projection[{self.direction_method}, γ={self.scale:g}, "
-                f"center={self.center}, select={self.selection}{edge}]")
+                f"center={self.center}, select={self.selection}{constraint}{edge}{relaxed}]")
 
     def sweep_table(self) -> str:
         if not self.sweep:
             return "(no sweep — γ was pinned)"
-        label = "held-out gap" if self.selection.startswith("cv") else "train gap"
-        lines = [f"  γ      {label}"]
-        for g, gap in self.sweep:
-            lines.append(f"  {g:<6g} {gap:+.4f}" + ("   <- chosen" if g == self.scale else ""))
+        label = "held-out" if self.selection.startswith("cv") else "train"
+        lines = [f"  γ      {label} gap   {label} unrel"]
+        for g, gap, unrel in self.sweep:
+            marker = "   <- chosen" if g == self.scale else ""
+            if self.constrain_unrel and unrel > self.unrel_threshold:
+                marker += "   [over threshold]"
+            lines.append(f"  {g:<6g} {gap:+.4f}      {unrel:.4f}{marker}")
+        if self.constraint_relaxed:
+            lines.append(
+                f"  no γ kept unrel <= {self.unrel_threshold:g} — fell back to the "
+                "lowest-unrel γ in the grid"
+            )
         return "\n".join(lines)
