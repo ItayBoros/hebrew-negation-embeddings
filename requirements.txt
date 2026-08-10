@@ -5,6 +5,7 @@ pandas
 # Embedding models + NLI
 sentence-transformers
 transformers
+accelerate       # required by transformers.Trainer (src/nli/train_nli.py)
 torch            # on Colab this is preinstalled; pin to the runtime's CUDA build
 scikit-learn     # for the logistic-regression negation direction (projection M2)
 # Plots / report

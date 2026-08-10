@@ -12,8 +12,9 @@ Two-person project. See OWNERSHIP.md for who owns what.
   - `python -m src.harness.run_eval --models fake`
   - `python -m tests.test_data_pipeline`
   - `python -m tests.test_projection`
+  - `python -m tests.test_nli_data`
 
-  Neither needs the network, a GPU, or a model download.
+  None of them needs the network, a GPU, or a model download.
 - Pull before you push (`git pull --rebase origin main`) to avoid drift.
 
 ## Frozen contracts 🔒

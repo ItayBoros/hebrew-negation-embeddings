@@ -14,6 +14,7 @@ Two-person split. Each person owns their files end-to-end; pushes to `main` are 
 
 - Eval harness (`src/harness/`): frozen model loading, cosine gap, NevIR-style rank, STS guard
 - NLI re-ranking intervention (`src/interventions/nli_rerank.py`)
+- NLI fine-tuning (`src/nli/`) and its offline check (`tests/test_nli_data.py`)
 - Report sections: `report/sections/04_methodology.md`, `05_results.md`, `06_contribution.md`
 
 ## Shared / FROZEN 🔒
