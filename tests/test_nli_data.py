@@ -14,7 +14,7 @@ silently stops filtering looks exactly like a filter that works — the training
 run still succeeds, the accuracy still looks fine — so the failure has to be
 caught here rather than noticed later.
 
-Three properties, each with a planted failure:
+Four properties, each with a planted failure:
 
   1. a held-out promptID takes ALL its siblings with it, not just the
      contradiction row (promptID 1001 -> 3 rows, e/n/c)
@@ -23,9 +23,15 @@ Three properties, each with a planted failure:
   3. the text audit catches a probe sentence that appears under a promptID the
      held-out list does NOT contain (promptID 1003), which is the case an
      identifier-level filter is blind to
+  4. the results table keeps one row per configuration, so training a second
+     base model cannot silently overwrite the first one's scores
+
+The last one is not a filter, but it fails the same way the others do — quietly,
+leaving a file that still looks right.
 """
 from __future__ import annotations
 
+import csv
 import sys
 import tempfile
 from pathlib import Path
@@ -34,6 +40,7 @@ from src.data import hebnli
 from src.nli.prepare_data import (
     find_text_overlap, normalise, prepare, probe_sentences,
 )
+from src.nli.train_nli import append_result
 from src.schema import ProbeItem, save_probe
 
 FIXTURE = Path(__file__).parent / "fixtures" / "hebnli_sample.jsonl"
@@ -146,6 +153,33 @@ def main() -> int:
             pass
         finally:
             hebnli.drop_prompts = original
+
+        print("\n== results table keeps one row per configuration ==")
+        # The failure this guards against is silent: a second run overwriting
+        # the first model's scores, leaving a plausible-looking file with a
+        # result missing from it.
+        table = Path(tmpdir) / "nli_train.csv"
+        base_row = {"base": "alephbert", "smoke_run": False, "lr": 2e-5,
+                    "batch_size": 32, "epochs": 2.0, "max_length": 128,
+                    "seed": 17, "max_train": "", "accuracy": 0.81}
+        check(append_result(dict(base_row), table) == 1, "first run should write 1 row", failures)
+        check(append_result(dict(base_row), table) == 1,
+              "an identical config should replace, not duplicate", failures)
+
+        gimmel = dict(base_row, base="alephbertgimmel", accuracy=0.84)
+        check(append_result(gimmel, table) == 2, "a different base should append", failures)
+
+        smoke = dict(base_row, smoke_run=True, max_train=2000, accuracy=0.55)
+        check(append_result(smoke, table) == 3,
+              "a smoke run must not overwrite the real run of the same base", failures)
+
+        with table.open(encoding="utf-8", newline="") as f:
+            written = list(csv.DictReader(f))
+        kept = {r["base"]: r["accuracy"] for r in written if r["smoke_run"] == "False"}
+        check(kept.get("alephbert") == "0.81",
+              f"alephbert's score was lost: {kept}", failures)
+        check(kept.get("alephbertgimmel") == "0.84",
+              f"gimmel's score was lost: {kept}", failures)
 
     if failures:
         print(f"\n{len(failures)} FAILED")

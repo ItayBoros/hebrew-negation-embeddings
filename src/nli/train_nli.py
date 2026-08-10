@@ -49,6 +49,7 @@ Drive. Only the manifest is committed.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import random
 from pathlib import Path
@@ -72,6 +73,24 @@ LABEL_IDS: Dict[str, int] = {label: i for i, label in enumerate(hebnli.LABELS)}
 #: How the premise/hypothesis pair is fed to the tokenizer. Recorded in the
 #: manifest because inference has to reproduce it exactly — see the docstring.
 PAIR_ENCODING = "two_segment"
+
+#: Column order for results/nli_train.csv — the comparison table across runs.
+#: The per-run JSON manifest holds the full provenance; this holds what the
+#: report needs side by side, the same way projection_ablation.csv does.
+CSV_FIELDS = [
+    "base", "base_model", "smoke_run", "n_train", "n_val",
+    "accuracy", "macro_f1",
+    "lr", "batch_size", "epochs", "max_length", "warmup_ratio", "seed",
+    "max_train", "checkpoint",
+]
+
+#: What makes a run a distinct configuration. Re-running an identical
+#: configuration replaces its row rather than appending a duplicate, so the file
+#: stays an ablation table instead of a log of every invocation. `smoke_run` is
+#: in the key so a --max-train run can never overwrite a real one.
+CONFIG_KEY = (
+    "base", "smoke_run", "lr", "batch_size", "epochs", "max_length", "seed", "max_train",
+)
 
 
 # --------------------------------------------------------------------------
@@ -126,6 +145,34 @@ def label_counts(rows: Sequence[hebnli.NLIRow]) -> Dict[str, int]:
     """Class balance, for the manifest. A collapsed distribution after
     filtering would quietly cap achievable accuracy."""
     return {label: sum(1 for r in rows if r.label == label) for label in hebnli.LABELS}
+
+
+def _signature(row: dict) -> tuple:
+    """Config identity, compared as text because a CSV read back gives strings."""
+    return tuple(str(row.get(key, "")) for key in CONFIG_KEY)
+
+
+def append_result(row: dict, path: str | Path) -> int:
+    """Add one run to the comparison table, replacing an identical config.
+
+    Read-modify-write rather than an append-mode handle: the existing rows have
+    to be re-read anyway to find a config already present, and rewriting the
+    whole file keeps the header correct if the file was missing or truncated.
+    Returns the total row count.
+    """
+    path = Path(path)
+    existing: List[dict] = []
+    if path.exists():
+        with path.open(encoding="utf-8", newline="") as f:
+            existing = [r for r in csv.DictReader(f) if _signature(r) != _signature(row)]
+
+    rows = existing + [row]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        w.writeheader()
+        w.writerows([{k: r.get(k, "") for k in CSV_FIELDS} for r in rows])
+    return len(rows)
 
 
 # --------------------------------------------------------------------------
@@ -237,7 +284,11 @@ def main() -> int:
                          "premises are sentences, not LCHAIM's paragraphs")
     ap.add_argument("--warmup-ratio", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=17)
-    ap.add_argument("--stats-out", default="results/nli_train_manifest.json")
+    ap.add_argument("--stats-out", default=None,
+                    help="per-run manifest (default: results/nli_train_<base>.json). "
+                         "Keyed on the base so a second model cannot overwrite it")
+    ap.add_argument("--results-csv", default="results/nli_train.csv",
+                    help="comparison table, one row per configuration")
     args = ap.parse_args()
 
     if not Path(args.train).exists():
@@ -268,8 +319,9 @@ def main() -> int:
     print(f"val macro F1         {metrics.get('eval_macro_f1', float('nan')):.4f}")
     print(f"checkpoint           -> {out_dir}")
 
-    Path(args.stats_out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.stats_out).write_text(json.dumps({
+    stats_out = args.stats_out or f"results/nli_train_{args.base}.json"
+    Path(stats_out).parent.mkdir(parents=True, exist_ok=True)
+    Path(stats_out).write_text(json.dumps({
         "base": args.base, "base_model": BASE_MODELS[args.base],
         "smoke_run": smoke,
         "train_file": args.train, "val_file": args.val,
@@ -285,7 +337,19 @@ def main() -> int:
             "seed": args.seed, "max_train": args.max_train,
         },
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"manifest             -> {args.stats_out}")
+    print(f"manifest             -> {stats_out}")
+
+    n_rows = append_result({
+        "base": args.base, "base_model": BASE_MODELS[args.base], "smoke_run": smoke,
+        "n_train": len(train_rows), "n_val": len(val_rows),
+        "accuracy": metrics.get("eval_accuracy", ""),
+        "macro_f1": metrics.get("eval_macro_f1", ""),
+        "lr": args.lr, "batch_size": args.batch_size, "epochs": args.epochs,
+        "max_length": args.max_length, "warmup_ratio": args.warmup_ratio,
+        "seed": args.seed, "max_train": args.max_train or "",
+        "checkpoint": out_dir,
+    }, args.results_csv)
+    print(f"comparison table     -> {args.results_csv}  ({n_rows} rows)")
 
     print("\nnext: check the label mapping survived training with")
     print(f"  python -m src.interventions.check_nli_labels  (pointed at {out_dir})")
