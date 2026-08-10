@@ -27,13 +27,24 @@ Two decisions that must not drift
    with real names. The released checkpoint exposes only LABEL_0/1/2, which is
    why `check_nli_labels.py` exists; anything we train should never need that
    guesswork again.
-2. **Input encoding.** Standard two-segment `tokenizer(premise, hypothesis)`,
-   which yields proper `token_type_ids`. This differs from `nli_rerank.py`, which
-   joins into one `"premise [SEP] hypothesis [SEP]"` string to match the released
-   checkpoint's own training code. Inference must use whatever training used —
-   a mismatch degrades the model silently, with no error — so the mode is
-   recorded in the manifest and `nli_rerank.py` needs a matching switch before it
-   loads this checkpoint.
+2. **Input encoding.** The pair always goes to the tokenizer as two arguments,
+   so [SEP] is placed correctly and truncation drops from the longer side rather
+   than blindly off the tail. Whether the resulting `token_type_ids` are *kept*
+   is not our choice — it is a property of the base:
+
+       onlplab/alephbert-base        type_vocab_size=1  -> segment ids dropped
+       dicta-il/alephbertgimmel-base type_vocab_size=2  -> segment ids kept
+
+   AlephBERT was pretrained without a segment distinction, so its embedding table
+   has one row while its tokenizer still emits `token_type_ids=1` for the second
+   sequence. Passing those through raises IndexError inside the embedding lookup.
+   This is very likely why the released checkpoint's authors flattened the pair
+   into one `"premise [SEP] hypothesis [SEP]"` string, the format `nli_rerank.py`
+   still reproduces — not a quirk, a workaround for the same constraint.
+
+   Inference must reproduce whatever training used; a mismatch degrades the model
+   silently, with no error. The mode actually used is written to the manifest,
+   and `nli_rerank.py` needs a matching switch before it loads this checkpoint.
 
     # smoke first — minutes, proves the pipeline before hours of GPU time
     python -m src.nli.train_nli --train data/raw/hebnli_train_clean.jsonl \
@@ -70,9 +81,13 @@ BASE_MODELS = {
 #: the mapping travels with the weights instead of living in a comment.
 LABEL_IDS: Dict[str, int] = {label: i for i, label in enumerate(hebnli.LABELS)}
 
-#: How the premise/hypothesis pair is fed to the tokenizer. Recorded in the
-#: manifest because inference has to reproduce it exactly — see the docstring.
-PAIR_ENCODING = "two_segment"
+#: How the premise/hypothesis pair was fed to the model. Recorded in the manifest
+#: because inference has to reproduce it exactly — see the docstring. Which one
+#: applies is a property of the base checkpoint, not a choice:
+#:   alephbert-base       type_vocab_size=1 -> no segment ids available
+#:   alephbertgimmel-base type_vocab_size=2 -> segment ids usable
+PAIR_WITH_SEGMENTS = "pair_with_segment_ids"
+PAIR_NO_SEGMENTS = "pair_without_segment_ids"
 
 #: Column order for results/nli_train.csv — the comparison table across runs.
 #: The per-run JSON manifest holds the full provenance; this holds what the
@@ -108,12 +123,22 @@ class NLIDataset:
     Tokenisation happens per item rather than up front so that padding is
     dynamic — HebNLI's length distribution is long-tailed, and padding every
     batch to `max_length` would waste most of the compute on padding.
+
+    `use_token_type_ids` must come from the model's own config. AlephBERT was
+    pretrained with `type_vocab_size=1`, so its segment-embedding table has a
+    single row while its tokenizer still emits `token_type_ids=1` for the second
+    sequence — feeding those through is an IndexError deep in the embedding
+    lookup, not a warning. AlephBERTGimmel has 2 and is fine. Passing the pair as
+    two arguments regardless is still worth it: the tokenizer places [SEP]
+    itself and truncates the longer side rather than blindly cutting the tail.
     """
 
-    def __init__(self, rows: Sequence[hebnli.NLIRow], tokenizer, max_length: int):
+    def __init__(self, rows: Sequence[hebnli.NLIRow], tokenizer, max_length: int,
+                 use_token_type_ids: bool):
         self.rows = list(rows)
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.use_token_type_ids = use_token_type_ids
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -124,6 +149,8 @@ class NLIDataset:
             row.premise_he, row.hypothesis_he,
             truncation=True, max_length=self.max_length,
         )
+        if not self.use_token_type_ids:
+            encoded.pop("token_type_ids", None)
         encoded["labels"] = LABEL_IDS[row.label]
         return encoded
 
@@ -179,34 +206,51 @@ def append_result(row: dict, path: str | Path) -> int:
 # training
 # --------------------------------------------------------------------------
 
-def _training_arguments(output_dir: str, args, evaluate: bool):
-    """Build `TrainingArguments`, tolerating the 4.46 rename of
-    `evaluation_strategy` to `eval_strategy`.
+def _training_arguments(output_dir: str, args, evaluate: bool, n_train: int):
+    """Build `TrainingArguments` across the transformers 4 / 5 divide.
 
-    Colab's transformers version is not ours to pin, and the two spellings are
-    otherwise identical, so try the current name and fall back rather than
-    demanding a specific release.
+    Colab's transformers version is not ours to pin and the two releases differ
+    in two places that matter here, so the accepted parameters are read off the
+    signature rather than guessed. Catching TypeError is not good enough: it
+    says a keyword was rejected but not which one, so a single try/except
+    misattributes an unrelated rejection to whichever alias it was testing.
+
+      * `evaluation_strategy` was renamed `eval_strategy` in 4.46.
+      * `warmup_ratio` was removed in 5.x, leaving only `warmup_steps`. The
+        ratio stays our CLI knob because it is the version-independent way to
+        say it, and is converted to a step count when that is all the installed
+        release understands.
     """
+    import inspect
+    import math
+
     from transformers import TrainingArguments  # lazy
 
-    common = dict(
+    accepted = set(inspect.signature(TrainingArguments.__init__).parameters)
+
+    kwargs = dict(
         output_dir=output_dir,
         learning_rate=args.lr,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        warmup_ratio=args.warmup_ratio,
         weight_decay=0.01,
         logging_steps=100,
         save_strategy="no",          # we save once at the end, ourselves
         seed=args.seed,
         report_to=[],
     )
+
     strategy = "epoch" if evaluate else "no"
-    try:
-        return TrainingArguments(eval_strategy=strategy, **common)
-    except TypeError:
-        return TrainingArguments(evaluation_strategy=strategy, **common)
+    kwargs["eval_strategy" if "eval_strategy" in accepted else "evaluation_strategy"] = strategy
+
+    if "warmup_ratio" in accepted:
+        kwargs["warmup_ratio"] = args.warmup_ratio
+    else:
+        steps_per_epoch = max(1, math.ceil(n_train / args.batch_size))
+        kwargs["warmup_steps"] = int(steps_per_epoch * args.epochs * args.warmup_ratio)
+
+    return TrainingArguments(**kwargs)
 
 
 def compute_metrics(eval_pred) -> dict:
@@ -225,8 +269,8 @@ def compute_metrics(eval_pred) -> dict:
 
 def train(train_rows: Sequence[hebnli.NLIRow],
           val_rows: Sequence[hebnli.NLIRow],
-          args) -> tuple[dict, str]:
-    """Fine-tune and save. Returns (val metrics, output directory)."""
+          args) -> tuple[dict, str, str]:
+    """Fine-tune and save. Returns (val metrics, output directory, encoding)."""
     from transformers import (  # lazy — importing this module must stay cheap
         AutoModelForSequenceClassification, AutoTokenizer, DataCollatorWithPadding,
         Trainer,
@@ -244,12 +288,19 @@ def train(train_rows: Sequence[hebnli.NLIRow],
         label2id=dict(LABEL_IDS),
     )
 
+    # Ask the model, don't assume: the two registered bases disagree on this.
+    segments = getattr(model.config, "type_vocab_size", 1) > 1
+    encoding = PAIR_WITH_SEGMENTS if segments else PAIR_NO_SEGMENTS
+    print(f"pair encoding        {encoding}")
+
     out_dir = args.out or f"checkpoints/{args.base}-hebnli-clean"
     trainer = Trainer(
         model=model,
-        args=_training_arguments(str(Path(out_dir) / "_trainer"), args, bool(val_rows)),
-        train_dataset=NLIDataset(train_rows, tokenizer, args.max_length),
-        eval_dataset=NLIDataset(val_rows, tokenizer, args.max_length) if val_rows else None,
+        args=_training_arguments(
+            str(Path(out_dir) / "_trainer"), args, bool(val_rows), len(train_rows)),
+        train_dataset=NLIDataset(train_rows, tokenizer, args.max_length, segments),
+        eval_dataset=(NLIDataset(val_rows, tokenizer, args.max_length, segments)
+                      if val_rows else None),
         data_collator=DataCollatorWithPadding(tokenizer),
         compute_metrics=compute_metrics if val_rows else None,
     )
@@ -260,7 +311,7 @@ def train(train_rows: Sequence[hebnli.NLIRow],
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out_dir)
     tokenizer.save_pretrained(out_dir)
-    return metrics, out_dir
+    return metrics, out_dir, encoding
 
 
 def main() -> int:
@@ -313,7 +364,7 @@ def main() -> int:
     if smoke:
         print("[warn] smoke run (--max-train) — do not report numbers from it")
 
-    metrics, out_dir = train(train_rows, val_rows, args)
+    metrics, out_dir, encoding = train(train_rows, val_rows, args)
 
     print(f"\nval accuracy         {metrics.get('eval_accuracy', float('nan')):.4f}")
     print(f"val macro F1         {metrics.get('eval_macro_f1', float('nan')):.4f}")
@@ -328,7 +379,7 @@ def main() -> int:
         "n_train": len(train_rows), "n_train_available": n_available,
         "n_val": len(val_rows),
         "train_balance": label_counts(train_rows),
-        "label_ids": LABEL_IDS, "pair_encoding": PAIR_ENCODING,
+        "label_ids": LABEL_IDS, "pair_encoding": encoding,
         "metrics": {k: v for k, v in metrics.items() if isinstance(v, (int, float))},
         "checkpoint": out_dir,
         "params": {
@@ -353,7 +404,8 @@ def main() -> int:
 
     print("\nnext: check the label mapping survived training with")
     print(f"  python -m src.interventions.check_nli_labels  (pointed at {out_dir})")
-    print("then point nli_rerank.py at it — it needs a two-segment encoding mode first.")
+    print(f"then point nli_rerank.py at it — it joins the pair into one string and")
+    print(f"must be switched to {encoding} to match how this was trained.")
     return 0
 
 
