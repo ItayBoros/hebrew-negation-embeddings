@@ -10,22 +10,49 @@ supplies entailment and contradiction probabilities for the ordered pair
 where ``0 <= lambda <= 1``. Both terms are in [-1, 1], so the combined score is
 also in [-1, 1]. Lambda currently defaults to 1.0 (pure NLI).
 
-The checkpoint exposes only LABEL_0/LABEL_1/LABEL_2. The mapping below comes
-from the authors' HebNLI/LCHAIM training code and was confirmed by running
-``python -m src.interventions.check_nli_labels`` on obvious Hebrew entailment,
-contradiction, and neutral pairs.
+Two checkpoints, two conventions
+--------------------------------
+This class has to serve both the released checkpoint and the one
+``src/nli/train_nli.py`` produces, and they differ in two ways that silently
+corrupt scores if confused.
 
-The checkpoint files live in the ``AlephBERT`` subfolder of the Hugging Face
-repository. Loading is lazy so importing the evaluation harness does not load
-PyTorch or download the checkpoint. Lambda tuning is intentionally not
-implemented in this class yet.
+**Label indices.** The released config exposes only LABEL_0/LABEL_1/LABEL_2, so
+its mapping is hardcoded below from the authors' training code and confirmed
+empirically with ``check_nli_labels``. Our own checkpoints write real names into
+``config.id2label``, so the mapping is read from the model and the hardcoded
+indices are ignored. ``label_names`` reports whichever applied.
+
+**Pair encoding.** ``JOINED`` builds a single ``"premise [SEP] hypothesis [SEP]"``
+string, matching the released checkpoint's own training code. ``PAIR`` passes the
+two sentences to the tokenizer as separate arguments, which is what we train
+with. The distinction is not cosmetic: a model reads whichever it was trained on
+and degrades quietly given the other, with no error to notice.
+
+Under ``PAIR``, ``token_type_ids`` are dropped when the model's
+``type_vocab_size`` is 1 — AlephBERT was pretrained without a segment
+distinction, so its embedding table has a single row while its tokenizer still
+emits a 1 for the second sequence. That is very likely why the released
+checkpoint's authors flattened the pair in the first place.
+
+Loading is lazy so importing the evaluation harness does not load PyTorch or
+download the checkpoint. Lambda tuning is intentionally not implemented yet.
 """
 from __future__ import annotations
 
+import re
 from typing import Dict, Optional
 
 from .base import Intervention
 from .baseline import cosine
+
+#: Pair-encoding modes. See the module docstring — picking the wrong one for a
+#: checkpoint costs accuracy without raising anything.
+JOINED = "joined"   # "premise [SEP] hypothesis [SEP]" as one string
+PAIR = "pair"       # tokenizer(premise, hypothesis) as two arguments
+
+#: A config that never had real label names produces these placeholders. Seeing
+#: them means id2label carries no information and the caller's indices stand.
+_PLACEHOLDER = re.compile(r"^LABEL_\d+$")
 
 
 class NLIReranking(Intervention):
@@ -49,7 +76,8 @@ class NLIReranking(Intervention):
         self,
         lam: float = 1.0,
         model_name: str = DEFAULT_MODEL_NAME,
-        model_subfolder: str = DEFAULT_MODEL_SUBFOLDER,
+        model_subfolder: Optional[str] = DEFAULT_MODEL_SUBFOLDER,
+        pair_encoding: str = JOINED,
         device: Optional[str] = None,
         contradiction_index: int = DEFAULT_LABEL_IDS["contradiction"],
         entailment_index: int = DEFAULT_LABEL_IDS["entailment"],
@@ -57,6 +85,8 @@ class NLIReranking(Intervention):
     ):
         if not 0.0 <= lam <= 1.0:
             raise ValueError("lam must be between 0 and 1")
+        if pair_encoding not in (JOINED, PAIR):
+            raise ValueError(f"pair_encoding must be one of {(JOINED, PAIR)}")
 
         label_ids = {
             "contradiction": contradiction_index,
@@ -69,12 +99,16 @@ class NLIReranking(Intervention):
         self.lam = float(lam)
         self.model_name = model_name
         self.model_subfolder = model_subfolder
+        self.pair_encoding = pair_encoding
         self.device = device
+        #: assumed mapping; replaced at load time if the config carries real names
         self.label_ids = label_ids
+        self.label_source = "assumed"
 
         self._tokenizer = None
         self._model = None
         self._device = None
+        self._use_token_type_ids = True
         self._raw_probability_cache: Dict[tuple[str, str], tuple[float, ...]] = {}
 
     def _load(self) -> None:
@@ -85,7 +119,10 @@ class NLIReranking(Intervention):
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        load_kwargs = {"subfolder": self.model_subfolder}
+        # Omit the key rather than passing None: a local checkpoint has its files
+        # at the top level, and `subfolder=None` is not the same as no subfolder
+        # as far as from_pretrained is concerned.
+        load_kwargs = {"subfolder": self.model_subfolder} if self.model_subfolder else {}
         self._tokenizer = AutoTokenizer.from_pretrained(
             self.model_name,
             **load_kwargs,
@@ -99,6 +136,28 @@ class NLIReranking(Intervention):
         self._device = torch.device(device_name)
         self._model.to(self._device)
         self._model.eval()
+
+        # Prefer what the checkpoint says over what the caller assumed: a config
+        # with real names is authoritative, and getting this backwards silently
+        # swaps entailment for contradiction — the score flips sign and nothing
+        # complains.
+        config = self._model.config
+        names = [config.id2label[i] for i in sorted(config.id2label)]
+        if not any(_PLACEHOLDER.match(str(n)) for n in names):
+            self.label_ids = {str(n).lower(): i for i, n in enumerate(names)}
+            self.label_source = "config"
+
+        missing = {"entailment", "contradiction"} - set(self.label_ids)
+        if missing:
+            raise ValueError(
+                f"{self.model_name} exposes labels {names} — no {sorted(missing)} to "
+                "score with. Pass explicit *_index arguments if the names differ."
+            )
+
+        # Same constraint train_nli.py hits: a base pretrained without a segment
+        # distinction has a one-row embedding table, and feeding it a 1 raises
+        # IndexError rather than warning.
+        self._use_token_type_ids = getattr(config, "type_vocab_size", 1) > 1
 
     def raw_label_probabilities(
         self,
@@ -115,16 +174,28 @@ class NLIReranking(Intervention):
 
         import torch
 
-        # This exactly follows the pair construction used in the authors'
-        # training and inference code before calling their tokenizer.
-        pair = f"{premise} [SEP] {hypothesis} [SEP]"
         max_length = int(self._model.config.max_position_embeddings)
-        inputs = self._tokenizer(
-            pair,
-            return_tensors="pt",
-            truncation=True,
-            max_length=max_length,
-        )
+        if self.pair_encoding == JOINED:
+            # Exactly the pair construction used in the released checkpoint's
+            # training and inference code before calling their tokenizer.
+            inputs = self._tokenizer(
+                f"{premise} [SEP] {hypothesis} [SEP]",
+                return_tensors="pt",
+                truncation=True,
+                max_length=max_length,
+            )
+        else:
+            # What train_nli.py does: two arguments, so the tokenizer places
+            # [SEP] itself and truncates the longer side rather than the tail.
+            inputs = self._tokenizer(
+                premise, hypothesis,
+                return_tensors="pt",
+                truncation=True,
+                max_length=max_length,
+            )
+            if not self._use_token_type_ids:
+                inputs.pop("token_type_ids", None)
+
         inputs = {name: value.to(self._device) for name, value in inputs.items()}
 
         with torch.inference_mode():
@@ -134,6 +205,16 @@ class NLIReranking(Intervention):
         probabilities = tuple(float(value) for value in raw_probabilities)
         self._raw_probability_cache[cache_key] = probabilities
         return probabilities
+
+    def label_names(self) -> Dict[int, str]:
+        """Class index -> label name, as actually in force after loading.
+
+        Loads the model if it has not been loaded, because until then the
+        mapping is only the caller's assumption.
+        """
+        self._load()
+        return {index: label for label, index in sorted(self.label_ids.items(),
+                                                        key=lambda kv: kv[1])}
 
     def _nli_probabilities(self, premise: str, hypothesis: str) -> Dict[str, float]:
         """Map raw classifier outputs to semantic NLI probabilities."""
