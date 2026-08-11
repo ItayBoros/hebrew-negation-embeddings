@@ -1,0 +1,92 @@
+{
+  "source": "data/raw/hebnli_train.jsonl",
+  "split": "train",
+  "probe": "data/probe/probe.jsonl",
+  "heldout_prompt_ids": 689,
+  "probe_sentences": 907,
+  "funnel": {
+    "loaded": 300067,
+    "prompt_id_clean": 297999,
+    "text_clean": 297990
+  },
+  "text_overlap": {
+    "rows_dropped": 9,
+    "hits_recorded": 9,
+    "hits": [
+      {
+        "pair_id": "142175e",
+        "prompt_id": "142175",
+        "label": "entailment",
+        "side": "hypothesis",
+        "premise": "בסדר, הוא הודה.",
+        "hypothesis": "הוא הודה שזה נכון."
+      },
+      {
+        "pair_id": "71208e",
+        "prompt_id": "71208",
+        "label": "entailment",
+        "side": "premise",
+        "premise": "ארוחת בוקר כלולה.",
+        "hypothesis": "ארוחת בוקר מוקדמת כלולה במחיר השהות שלך."
+      },
+      {
+        "pair_id": "99846c",
+        "prompt_id": "99846",
+        "label": "contradiction",
+        "side": "hypothesis",
+        "premise": "כן, הוא אמר, מהנהן ברצינות.",
+        "hypothesis": "הוא אמר לא."
+      },
+      {
+        "pair_id": "76739c",
+        "prompt_id": "76739",
+        "label": "contradiction",
+        "side": "hypothesis",
+        "premise": "אני מבין לגמרי.",
+        "hypothesis": "אני לא מבין את זה בכלל."
+      },
+      {
+        "pair_id": "1136n",
+        "prompt_id": "1136",
+        "label": "neutral",
+        "side": "hypothesis",
+        "premise": "בשביל מה בדיוק?",
+        "hypothesis": "למה אתה צריך את זה?"
+      },
+      {
+        "pair_id": "28888c",
+        "prompt_id": "28888",
+        "label": "contradiction",
+        "side": "hypothesis",
+        "premise": "אנחנו יודעים זאת, כי מאוחר יותר היא ביקשה מדורקאס להביא לה קצת.",
+        "hypothesis": "אנחנו לא יודעים את זה."
+      },
+      {
+        "pair_id": "71208c",
+        "prompt_id": "71208",
+        "label": "contradiction",
+        "side": "premise",
+        "premise": "ארוחת בוקר כלולה.",
+        "hypothesis": "יש חיוב נוסף על ארוחת בוקר."
+      },
+      {
+        "pair_id": "116791c",
+        "prompt_id": "116791",
+        "label": "contradiction",
+        "side": "hypothesis",
+        "premise": "יש לי ”\"",
+        "hypothesis": "אין לי את זה."
+      },
+      {
+        "pair_id": "71208n",
+        "prompt_id": "71208",
+        "label": "neutral",
+        "side": "premise",
+        "premise": "ארוחת בוקר כלולה.",
+        "hypothesis": "ארוחת הבוקר היא בחינם ומוכנה לפי הזמנה בכל בוקר."
+      }
+    ]
+  },
+  "rows_written": 297990,
+  "out": "data/raw/hebnli_train_clean.jsonl"
+}

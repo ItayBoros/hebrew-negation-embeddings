@@ -64,9 +64,14 @@ STAGES = ["loaded", "prompt_id_clean", "text_clean"]
 #: The probe whose sentences must not appear in training data. Read only.
 DEFAULT_PROBE = "data/probe/probe.jsonl"
 
-#: How many overlap examples to keep in the manifest. Enough to eyeball what
-#: kind of collision it was; not so many that the manifest stops being readable.
-MANIFEST_EXAMPLES = 5
+#: How many overlap hits to print. The console is for noticing that it happened.
+PRINTED_EXAMPLES = 5
+
+#: How many to record. Every hit, up to a sanity bound — these are the evidence
+#: behind a contamination claim in the report, and a truncated list cannot be
+#: audited later. The real count is single digits; the bound only exists so a
+#: filter that has gone wrong cannot write a 300k-row manifest.
+MANIFEST_HITS = 500
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -200,7 +205,7 @@ def main() -> int:
     print(f"probe sentences      {len(sentences)}")
     print(funnel.report(STAGES))
     print(f"\ntext overlap         {len(hits)} rows dropped beyond the id filter")
-    for hit in hits[:MANIFEST_EXAMPLES]:
+    for hit in hits[:PRINTED_EXAMPLES]:
         # Identify the row, don't echo it. A Windows console is cp1252 and dies
         # on Hebrew; the sentences themselves go to the manifest, which is
         # written as UTF-8 and is where you would read them anyway.
@@ -215,7 +220,8 @@ def main() -> int:
         "funnel": dict(funnel.counts),
         "text_overlap": {
             "rows_dropped": len(hits),
-            "examples": hits[:MANIFEST_EXAMPLES],
+            "hits_recorded": min(len(hits), MANIFEST_HITS),
+            "hits": hits[:MANIFEST_HITS],
         },
         "rows_written": n, "out": args.out,
     }, ensure_ascii=False, indent=2), encoding="utf-8")

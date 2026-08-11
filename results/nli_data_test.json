@@ -1,0 +1,19 @@
+{
+  "source": "data/raw/hebnli_test.jsonl",
+  "split": "test",
+  "probe": "data/probe/probe.jsonl",
+  "heldout_prompt_ids": 689,
+  "probe_sentences": 907,
+  "funnel": {
+    "loaded": 884,
+    "prompt_id_clean": 883,
+    "text_clean": 883
+  },
+  "text_overlap": {
+    "rows_dropped": 0,
+    "hits_recorded": 0,
+    "hits": []
+  },
+  "rows_written": 883,
+  "out": "data/raw/hebnli_test_clean.jsonl"
+}

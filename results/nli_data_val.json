@@ -1,0 +1,28 @@
+{
+  "source": "data/raw/hebnli_val.jsonl",
+  "split": "val",
+  "probe": "data/probe/probe.jsonl",
+  "heldout_prompt_ids": 689,
+  "probe_sentences": 907,
+  "funnel": {
+    "loaded": 1999,
+    "prompt_id_clean": 1990,
+    "text_clean": 1989
+  },
+  "text_overlap": {
+    "rows_dropped": 1,
+    "hits_recorded": 1,
+    "hits": [
+      {
+        "pair_id": "72915c",
+        "prompt_id": "72915",
+        "label": "contradiction",
+        "side": "hypothesis",
+        "premise": "זה מבלבל אותי.",
+        "hypothesis": "אני מבין את זה לגמרי."
+      }
+    ]
+  },
+  "rows_written": 1989,
+  "out": "data/raw/hebnli_val_clean.jsonl"
+}
