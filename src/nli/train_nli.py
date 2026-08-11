@@ -46,16 +46,35 @@ Two decisions that must not drift
    silently, with no error. The mode actually used is written to the manifest,
    and `nli_rerank.py` needs a matching switch before it loads this checkpoint.
 
-    # smoke first — minutes, proves the pipeline before hours of GPU time
+    # smoke first — minutes, proves the pipeline before hours of GPU time.
+    # Ephemeral Colab storage is right here: the weights are throwaway.
     python -m src.nli.train_nli --train data/raw/hebnli_train_clean.jsonl \
         --val data/raw/hebnli_val_clean.jsonl --max-train 2000 --epochs 1
 
-    # the real run
+    # the real run — output on Drive, checkpointed every epoch
     python -m src.nli.train_nli --train data/raw/hebnli_train_clean.jsonl \
-        --val data/raw/hebnli_val_clean.jsonl
+        --val data/raw/hebnli_val_clean.jsonl --save-epochs \
+        --out /content/drive/MyDrive/hebrew-negation/checkpoints/alephbert-hebnli-clean
 
-Weights are written under `checkpoints/`, which `.gitignore` blocks — they go to
-Drive. Only the manifest is committed.
+Surviving a disconnect
+----------------------
+A free-tier T4 session ends when it ends, and the full run is hours. With
+`--save-epochs` the Trainer writes a resumable checkpoint after every epoch,
+keeping `--save-total-limit` of them, and re-running the same command picks up
+from the newest one automatically — `--fresh` is how you say you meant to start
+over. Without the flag nothing exists on disk until training completes, so a
+disconnect at 90% loses all of it.
+
+Those checkpoints carry optimiser state and exist only to resume. The artifact
+`nli_rerank` loads is written separately at the end by `save_pretrained`, which
+happens either way.
+
+**The output must be on Drive for the full run.** `/content` is wiped when the
+runtime resets. The program warns rather than refuses, since it also runs off
+Colab, but the warning is the difference between a checkpoint and nothing.
+
+Weights never enter git — `.gitignore` blocks `checkpoints/` and `*.safetensors`.
+Only the manifest and the comparison table are committed.
 """
 from __future__ import annotations
 
@@ -174,6 +193,42 @@ def label_counts(rows: Sequence[hebnli.NLIRow]) -> Dict[str, int]:
     return {label: sum(1 for r in rows if r.label == label) for label in hebnli.LABELS}
 
 
+#: Colab wipes everything outside the mounted Drive when the runtime resets, and
+#: a full run is hours of GPU time. Used only to warn, never to rewrite a path —
+#: silently relocating someone's output would be worse than losing it.
+DRIVE_PREFIX = "/content/drive/"
+
+
+def latest_checkpoint(trainer_dir: str | Path) -> Optional[str]:
+    """Newest `checkpoint-<step>` written by Trainer, or None.
+
+    Ordered by step number rather than mtime: Drive's timestamps come from the
+    sync, not the write, so the newest file on disk is not reliably the furthest
+    through training.
+    """
+    directory = Path(trainer_dir)
+    if not directory.is_dir():
+        return None
+    numbered = [
+        (int(path.name.rsplit("-", 1)[-1]), path)
+        for path in directory.glob("checkpoint-*")
+        if path.is_dir() and path.name.rsplit("-", 1)[-1].isdigit()
+    ]
+    return str(max(numbered)[1]) if numbered else None
+
+
+def warn_if_ephemeral(out_dir: str, smoke: bool) -> None:
+    """Say so when a full run is about to write hours of work somewhere Colab
+    will delete. Only a warning: this also runs off Colab, where the check is
+    meaningless, and refusing to start would be worse than the risk it prevents.
+    """
+    if smoke or not Path("/content").is_dir():
+        return
+    if not str(out_dir).replace("\\", "/").startswith(DRIVE_PREFIX):
+        print(f"[warn] --out is {out_dir}, which is not under {DRIVE_PREFIX}")
+        print("[warn] a runtime reset deletes it. Mount Drive and pass --out there.")
+
+
 def _signature(row: dict) -> tuple:
     """Config identity, compared as text because a CSV read back gives strings."""
     return tuple(str(row.get(key, "")) for key in CONFIG_KEY)
@@ -236,7 +291,11 @@ def _training_arguments(output_dir: str, args, evaluate: bool, n_train: int):
         num_train_epochs=args.epochs,
         weight_decay=0.01,
         logging_steps=100,
-        save_strategy="no",          # we save once at the end, ourselves
+        # Per-epoch checkpoints are opt-in. They are what makes a disconnected
+        # Colab session recoverable, but each one is ~480MB, so a smoke run has
+        # no business writing them. The final model is saved by us either way.
+        save_strategy="epoch" if args.save_epochs else "no",
+        save_total_limit=args.save_total_limit,
         seed=args.seed,
         report_to=[],
     )
@@ -294,20 +353,34 @@ def train(train_rows: Sequence[hebnli.NLIRow],
     print(f"pair encoding        {encoding}")
 
     out_dir = args.out or f"checkpoints/{args.base}-hebnli-clean"
+    trainer_dir = str(Path(out_dir) / "_trainer")
+
+    # Resume by default when a checkpoint is there. The situation this exists for
+    # is a session that died hours in, where remembering a flag is exactly what
+    # someone will fail to do; --fresh is the way to say you meant to start over.
+    resume = None if args.fresh else latest_checkpoint(trainer_dir)
+    if resume:
+        print(f"resuming from        {resume}")
+    elif args.fresh and latest_checkpoint(trainer_dir):
+        print("[warn] --fresh: ignoring the checkpoints already in the output dir")
+
     trainer = Trainer(
         model=model,
         args=_training_arguments(
-            str(Path(out_dir) / "_trainer"), args, bool(val_rows), len(train_rows)),
+            trainer_dir, args, bool(val_rows), len(train_rows)),
         train_dataset=NLIDataset(train_rows, tokenizer, args.max_length, segments),
         eval_dataset=(NLIDataset(val_rows, tokenizer, args.max_length, segments)
                       if val_rows else None),
         data_collator=DataCollatorWithPadding(tokenizer),
         compute_metrics=compute_metrics if val_rows else None,
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume)
 
     metrics = trainer.evaluate() if val_rows else {}
 
+    # The final model is saved by us regardless of --save-epochs, and separately
+    # from Trainer's checkpoints: those carry optimiser state and are for
+    # resuming, this is the artifact nli_rerank loads.
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out_dir)
     tokenizer.save_pretrained(out_dir)
@@ -335,6 +408,16 @@ def main() -> int:
                          "premises are sentences, not LCHAIM's paragraphs")
     ap.add_argument("--warmup-ratio", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=17)
+    ap.add_argument("--save-epochs", action="store_true",
+                    help="write a resumable checkpoint after every epoch. Use for "
+                         "the full run — a Colab disconnect otherwise loses all of "
+                         "it. Leave off for smoke runs; each one is ~480MB")
+    ap.add_argument("--save-total-limit", type=int, default=2,
+                    help="how many epoch checkpoints to keep (default 2: the "
+                         "newest, plus one in case it was cut off mid-write)")
+    ap.add_argument("--fresh", action="store_true",
+                    help="ignore any checkpoint in the output dir and start over. "
+                         "Without this, training resumes from the newest one")
     ap.add_argument("--stats-out", default=None,
                     help="per-run manifest (default: results/nli_train_<base>.json). "
                          "Keyed on the base so a second model cannot overwrite it")
@@ -363,6 +446,9 @@ def main() -> int:
     print(f"train balance        {label_counts(train_rows)}")
     if smoke:
         print("[warn] smoke run (--max-train) — do not report numbers from it")
+    warn_if_ephemeral(args.out or f"checkpoints/{args.base}-hebnli-clean", smoke)
+    if not smoke and not args.save_epochs:
+        print("[warn] --save-epochs is off: a disconnect loses the whole run")
 
     metrics, out_dir, encoding = train(train_rows, val_rows, args)
 
@@ -386,6 +472,8 @@ def main() -> int:
             "lr": args.lr, "batch_size": args.batch_size, "epochs": args.epochs,
             "max_length": args.max_length, "warmup_ratio": args.warmup_ratio,
             "seed": args.seed, "max_train": args.max_train,
+            "save_epochs": args.save_epochs,
+            "save_total_limit": args.save_total_limit,
         },
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"manifest             -> {stats_out}")
