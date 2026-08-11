@@ -85,11 +85,59 @@ python -m src.interventions.projection_report \
 γ is chosen by cross-validation inside the train split, never on test. See the
 module docstring in `src/interventions/projection.py` for the reasoning.
 
+## The NLI re-ranking intervention
+
+Blends the embedder's cosine with a Hebrew NLI model's
+`P(entailment) − P(contradiction)`.
+
+**The probe was mined from HebNLI's train split**, so any NLI model fine-tuned on
+HebNLI has already seen our (target, negation) pairs carrying the gold
+`contradiction` label — including `oriel9p/AlephBERT-FT-HebNLI-LCHAIM`. Scored
+with such a model, this intervention measures memorisation, not negation
+understanding. So we train our own on HebNLI with those rows removed.
+
+```bash
+# 1. filter, once per split. Two passes: Itay's 689 held-out promptIDs, then a
+#    text-level audit for probe sentences reachable under a *different* promptID
+python -m src.nli.prepare_data --split train --out data/raw/hebnli_train_clean.jsonl
+python -m src.nli.prepare_data --split val   --out data/raw/hebnli_val_clean.jsonl
+python -m src.nli.prepare_data --split test  --out data/raw/hebnli_test_clean.jsonl
+
+# 2. smoke run first — minutes, on throwaway storage
+python -m src.nli.train_nli --train data/raw/hebnli_train_clean.jsonl \
+    --val data/raw/hebnli_val_clean.jsonl --max-train 2000 --epochs 1
+
+# 3. the real run. --out MUST be on Drive under Colab, and --save-epochs makes a
+#    disconnect recoverable; re-run the same command to resume from the newest
+python -m src.nli.train_nli --train data/raw/hebnli_train_clean.jsonl \
+    --val data/raw/hebnli_val_clean.jsonl --save-epochs \
+    --out /content/drive/MyDrive/hebrew-negation/checkpoints/alephbert-hebnli-clean
+
+# 4. confirm the label mapping describes what the model actually does
+python -m src.interventions.check_nli_labels \
+    --model checkpoints/alephbert-hebnli-clean --subfolder ""
+```
+
+`--base alephbert` (default) or `--base alephbertgimmel`; the key names the
+checkpoint directory and the manifest, so runs never overwrite each other.
+Each run adds a row to `results/nli_train.csv`, and the filter counts land in
+`results/nli_data_<split>.json` — both go in the report.
+
+Two things that must match between training and inference, because getting
+either wrong degrades the model silently rather than raising: the **label
+mapping** (ours is written into `config.id2label` with real names; the released
+checkpoint exposes only LABEL_0/1/2) and the **pair encoding** (`joined` for the
+released checkpoint, `pair` for ours — and `alephbert-base` cannot take segment
+ids at all, since it was pretrained with `type_vocab_size=1`).
+
+`notebooks/02_train_nli.ipynb` runs the whole path on Colab.
+
 ## Tests
 
 ```bash
 python -m tests.test_data_pipeline      # mine -> finalize -> validate, offline
 python -m tests.test_projection         # projection, on a planted direction
+python -m tests.test_nli_data           # NLI contamination filters, offline
 python -m src.data.negation --selftest  # negation lexicon only
 ```
 
@@ -102,7 +150,9 @@ something `FakeEmbedder` cannot tell you, since it is only noise.
 - `src/interventions/base.py` — the intervention interface (shared contract).
 - `src/interventions/` — `baseline`, `projection` (A), `nli_rerank` (B).
 - `src/harness/` — models, metrics, and the runner (B).
+- `src/nli/` — HebNLI decontamination and NLI fine-tuning (B).
 - `src/data/` — HebNLI loading, Hebrew negation detection, probe mining (A).
 - `data/probe/` — the negation probe (A); `mock_probe.jsonl` is a stand-in.
+- `notebooks/` — Colab wrappers: `01` builds the probe (A), `02` trains NLI (B).
 
 See **PLAN.md** for the full work split, Git workflow, and milestones.
