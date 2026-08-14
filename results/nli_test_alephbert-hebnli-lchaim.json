@@ -1,0 +1,62 @@
+{
+  "checkpoint": "oriel9p/AlephBERT-FT-HebNLI-LCHAIM",
+  "test_file": "data/raw/hebnli_test_clean.jsonl",
+  "n_examples": 883,
+  "label_ids": {
+    "entailment": 0,
+    "neutral": 1,
+    "contradiction": 2
+  },
+  "label_source": "assumed(released)",
+  "pair_encoding": "joined",
+  "caveat": "this checkpoint was fine-tuned on all of HebNLI rather than a train/test split, so this test set was very likely part of its own training data - treat this score as a reference point, not a fair comparison",
+  "accuracy": 0.7270668176670442,
+  "macro_precision": 0.7386171816466721,
+  "macro_recall": 0.7216527931205262,
+  "macro_f1": 0.7219591901801371,
+  "per_class": {
+    "entailment": {
+      "precision": 0.75,
+      "recall": 0.7722772277227723,
+      "f1": 0.7609756097560976,
+      "support": 303
+    },
+    "neutral": {
+      "precision": 0.7929292929292929,
+      "recall": 0.575091575091575,
+      "f1": 0.6666666666666666,
+      "support": 273
+    },
+    "contradiction": {
+      "precision": 0.6729222520107239,
+      "recall": 0.8175895765472313,
+      "f1": 0.7382352941176471,
+      "support": 307
+    }
+  },
+  "confusion_matrix": {
+    "labels": [
+      "entailment",
+      "neutral",
+      "contradiction"
+    ],
+    "matrix": [
+      [
+        234,
+        15,
+        54
+      ],
+      [
+        48,
+        157,
+        68
+      ],
+      [
+        30,
+        26,
+        251
+      ]
+    ]
+  },
+  "test_loss": 0.6946575045585632
+}

@@ -1,0 +1,4 @@
+model,intervention,n_test,sim_paraphrase,sim_negation,cosine_gap,nevir_rank,sts_pearson,sts_spearman,nli_checkpoint,nli_subfolder,nli_encoding,nli_lam
+multilingual-e5,nli_rerank,151,0.40317869872866285,-0.7382593082560115,1.1414380069846743,0.9867549668874173,,,oriel9p/AlephBERT-FT-HebNLI-LCHAIM,AlephBERT,joined,1.0
+multilingual-e5,nli_rerank,151,0.8599713817377581,-0.962295003749572,1.82226638548733,0.9933774834437086,,,/content/drive/MyDrive/hebrew-negation/checkpoints/alephbert-hebnli-clean,,pair,1.0
+
