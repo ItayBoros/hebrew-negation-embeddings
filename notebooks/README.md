@@ -24,3 +24,15 @@ secret named `HF_TOKEN`.
 
 The notebook stops in the middle on purpose (section 3): the miner proposes
 candidates, a human decides.
+
+## `03_eval_nli.ipynb` (B)
+
+Scores whatever `02_train_nli.ipynb` produced on `hebnli_test_clean.jsonl` — the
+883-row held-out split neither training nor model selection ever touched. Read-only:
+it mounts Drive to load the checkpoint, runs a forward pass, and writes
+`results/nli_test_*` — nothing here can change the weights.
+
+Must never be pointed at `data/probe/review_raw.csv` (689 mined candidates) or
+`data/probe/splits/test.jsonl` (151 negation-probe items) — see
+`data/probe/README.md` for why those are held out of NLI fine-tuning in the first
+place; scoring the test set on them measures something else entirely.
