@@ -24,9 +24,10 @@ from pathlib import Path
 import numpy as np
 
 from src.data import hebnli
+from src.interventions.nli_rerank import JOINED, NLIReranking
 from src.nli.eval_nli import (
     build_predictions_rows, build_summary, check_test_file, cross_entropy,
-    pair_encoding_for, softmax, verify_label_mapping, write_predictions_csv,
+    pair_encoding_for, resolve_label_order, softmax, write_predictions_csv,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "hebnli_sample.jsonl"
@@ -62,16 +63,32 @@ def main() -> int:
     check(pair_encoding_for(2) == "pair_with_segment_ids",
           "type_vocab_size=2 (AlephBERTGimmel) must keep segment ids", failures)
 
-    print("\n== verify_label_mapping ==")
+    print("\n== resolve_label_order: our own checkpoint (real names) ==")
+    perm, source = resolve_label_order({0: "entailment", 1: "neutral", 2: "contradiction"})
+    check(perm == [0, 1, 2], f"identity permutation expected for our own order, got {perm}", failures)
+    check(source == "config", f"real names must report source 'config', got {source}", failures)
+
+    perm, source = resolve_label_order({0: "neutral", 1: "entailment", 2: "contradiction"})
+    check(perm == [1, 0, 2],
+          f"CLASS_ORDER is (entailment, neutral, contradiction); a checkpoint with "
+          f"(neutral, entailment, contradiction) at raw indices (0,1,2) must permute "
+          f"to [1, 0, 2], got {perm}", failures)
+    check(source == "config", f"real names must report source 'config', got {source}", failures)
+
     try:
-        verify_label_mapping({0: "entailment", 1: "neutral", 2: "contradiction"})
-    except ValueError:
-        check(False, "the correct mapping must not raise", failures)
-    try:
-        verify_label_mapping({0: "neutral", 1: "entailment", 2: "contradiction"})
-        check(False, "a swapped mapping must raise", failures)
+        resolve_label_order({0: "up", 1: "down", 2: "sideways"})
+        check(False, "real names that are not our three classes must raise", failures)
     except ValueError:
         pass
+
+    print("\n== resolve_label_order: the released checkpoint (placeholder names) ==")
+    perm, source = resolve_label_order({0: "LABEL_0", 1: "LABEL_1", 2: "LABEL_2"})
+    check(source == "assumed(released)",
+          f"placeholder names must report source 'assumed(released)', got {source}", failures)
+    expected_perm = [NLIReranking.DEFAULT_LABEL_IDS[label] for label in hebnli.LABELS]
+    check(perm == expected_perm,
+          f"placeholder fallback must reuse NLIReranking.DEFAULT_LABEL_IDS verbatim, "
+          f"expected {expected_perm}, got {perm}", failures)
 
     print("\n== build_summary: a class the model never predicts ==")
     # 6 true examples, 2 per class; the model only ever says entailment or

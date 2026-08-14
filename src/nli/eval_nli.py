@@ -22,12 +22,35 @@ checkpoint `train_nli.py` already saved, the two are guaranteed to agree —
 there is no separate choice to get wrong here.
 
 Label indices come from the checkpoint's own `config.id2label`, written by
-`train_nli.py` at save time. `verify_label_mapping` fails loudly if that
-mapping does not read `{0: entailment, 1: neutral, 2: contradiction}`, the
-same drift `check_nli_labels.py` was built to catch.
+`train_nli.py` at save time. `resolve_label_order` fails loudly if that
+mapping does not read `{0: entailment, 1: neutral, 2: contradiction}` or one
+of the placeholder `LABEL_0/1/2` names `nli_rerank.py` already knows how to
+handle for the released checkpoint — the same drift `check_nli_labels.py`
+was built to catch.
 
+Also usable on the released checkpoint for comparison
+-------------------------------------------------------
+`nli_rerank.py` defaults to `oriel9p/AlephBERT-FT-HebNLI-LCHAIM`, trained on
+*all* of HebNLI rather than a train/test split — so this test set was very
+likely part of its own training data, and a strong score from it measures
+memorisation, not generalisation. Evaluating it here is for a labelled,
+honest reference point, never a fair comparison; `evaluate_checkpoint` stamps
+a `caveat` into the summary whenever the checkpoint matches
+`NLIReranking.DEFAULT_MODEL_NAME` so that number can never be read as one.
+
+That checkpoint also differs from ours in the two ways `nli_rerank.py`
+already has to handle: its pair goes in as one joined string rather than two
+tokenizer arguments, and its config exposes only `LABEL_0/1/2` rather than
+real names. Both are auto-detected the same way `check_nli_labels.py` does,
+reusing `nli_rerank`'s own constants rather than redefining them.
+
+    # our checkpoint
     python -m src.nli.eval_nli \\
         --checkpoint /content/drive/MyDrive/hebrew-negation/checkpoints/alephbert-hebnli-clean \\
+        --test data/raw/hebnli_test_clean.jsonl
+
+    # the released checkpoint, for comparison
+    python -m src.nli.eval_nli --checkpoint oriel9p/AlephBERT-FT-HebNLI-LCHAIM \\
         --test data/raw/hebnli_test_clean.jsonl
 """
 from __future__ import annotations
@@ -36,9 +59,10 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..data import hebnli
+from ..interventions.nli_rerank import _PLACEHOLDER, JOINED, PAIR, NLIReranking
 from .train_nli import LABEL_IDS, PAIR_NO_SEGMENTS, PAIR_WITH_SEGMENTS
 
 #: Fixed report order everywhere a class list appears — the confusion matrix,
@@ -78,26 +102,41 @@ def check_test_file(path: str | Path, expected_n: int) -> List[hebnli.NLIRow]:
     return rows
 
 
-def verify_label_mapping(id2label: Dict[int, str]) -> None:
-    """The checkpoint's own `config.id2label`, not an assumption.
+def resolve_label_order(id2label: Dict[int, str]) -> Tuple[List[int], str]:
+    """Map the checkpoint's own raw output order onto `CLASS_ORDER`.
 
-    `train_nli.py` writes real names into the config at save time, so a
-    mismatch here means the checkpoint being loaded is not the one this
-    project trained — the same failure mode `check_nli_labels.py` exists to
-    catch before it silently mislabels every prediction.
+    Returns `(perm, source)` where `perm[i]` is the raw model index carrying
+    `CLASS_ORDER[i]`, so `logits[:, perm]` reorders any checkpoint's logits
+    into our canonical (entailment, neutral, contradiction) columns before
+    anything downstream has to know which checkpoint produced them.
+
+    Two checkpoints, same as `nli_rerank.py`: real names in `config.id2label`
+    (ours, from `train_nli.py`) are read directly; placeholder `LABEL_0/1/2`
+    names (the released checkpoint) fall back to `NLIReranking`'s hardcoded,
+    empirically-confirmed mapping rather than duplicating those indices here.
+    Anything else — real names that are not our three classes — fails loudly,
+    the same failure mode `check_nli_labels.py` exists to catch.
     """
-    expected = {i: label for label, i in LABEL_IDS.items()}
-    if dict(id2label) != expected:
-        raise ValueError(
-            f"checkpoint's id2label {id2label} does not match the expected "
-            f"mapping {expected} — re-run check_nli_labels.py against this "
-            "checkpoint before trusting any numbers from it"
-        )
+    names = [str(id2label[i]) for i in sorted(id2label)]
+    if not any(_PLACEHOLDER.match(n) for n in names):
+        name_to_raw = {n.lower(): i for i, n in enumerate(names)}
+        missing = set(CLASS_ORDER) - set(name_to_raw)
+        if missing:
+            raise ValueError(
+                f"checkpoint's id2label {dict(id2label)} is missing {sorted(missing)} — "
+                "re-run check_nli_labels.py against this checkpoint before trusting "
+                "any numbers from it"
+            )
+        return [name_to_raw[label] for label in CLASS_ORDER], "config"
+
+    name_to_raw = NLIReranking.DEFAULT_LABEL_IDS
+    return [name_to_raw[label] for label in CLASS_ORDER], "assumed(released)"
 
 
 def pair_encoding_for(type_vocab_size: int) -> str:
     """Same rule `train_nli.train()` uses to decide it, applied to a loaded
-    checkpoint instead of a base model about to be fine-tuned."""
+    checkpoint instead of a base model about to be fine-tuned. Only relevant
+    under `PAIR` — `JOINED` never has a second sequence to worry about."""
     return PAIR_WITH_SEGMENTS if type_vocab_size > 1 else PAIR_NO_SEGMENTS
 
 
@@ -133,10 +172,14 @@ def build_summary(
     test_path: str,
     pair_encoding: str,
     test_loss: float | None,
+    label_source: str = "config",
+    caveat: Optional[str] = None,
 ) -> dict:
     """Everything `results/nli_test_<key>.json` must contain, per class order
     `CLASS_ORDER` throughout so the confusion matrix and the per-class table
-    read the same way.
+    read the same way — regardless of which checkpoint produced `y_pred`,
+    since the caller has already permuted logits into this order via
+    `resolve_label_order`.
 
     `zero_division=0` rather than sklearn's default warning-and-nan: a class
     the model never predicts must still produce a reportable (and low) score,
@@ -157,7 +200,9 @@ def build_summary(
         "test_file": test_path,
         "n_examples": int(len(y_true)),
         "label_ids": dict(LABEL_IDS),
+        "label_source": label_source,
         "pair_encoding": pair_encoding,
+        "caveat": caveat,
         "accuracy": accuracy,
         "macro_precision": float(macro_precision),
         "macro_recall": float(macro_recall),
@@ -215,13 +260,20 @@ def write_predictions_csv(prediction_rows: Sequence[dict], path: str | Path) -> 
 # model-touching — lazy imports, never called by tests
 # --------------------------------------------------------------------------
 
-def load_checkpoint(checkpoint: str):
+def load_checkpoint(checkpoint: str, subfolder: Optional[str] = None):
     """Model and tokenizer, both from `checkpoint` — never a base-model id,
-    since the released base has not seen this project's label names."""
+    since the released base has not seen this project's label names.
+
+    `subfolder` matches `NLIReranking`'s own handling: the released repo
+    keeps its files under `AlephBERT/`, while a local checkpoint has them at
+    the top level, so the key is omitted rather than passed as `None` — as
+    far as `from_pretrained` is concerned those are not the same thing.
+    """
     from transformers import AutoModelForSequenceClassification, AutoTokenizer  # lazy
 
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
-    model = AutoModelForSequenceClassification.from_pretrained(checkpoint)
+    load_kwargs = {"subfolder": subfolder} if subfolder else {}
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, **load_kwargs)
+    model = AutoModelForSequenceClassification.from_pretrained(checkpoint, **load_kwargs)
     model.eval()
     return model, tokenizer
 
@@ -230,6 +282,7 @@ def predict_logits(
     rows: Sequence[hebnli.NLIRow],
     model,
     tokenizer,
+    encoding: str,
     use_token_type_ids: bool,
     batch_size: int,
     max_length: int,
@@ -237,7 +290,12 @@ def predict_logits(
 ):
     """Forward pass only — `model.eval()` plus `no_grad()`, no optimiser, no
     `.backward()`, nothing that could change a weight. Dynamic per-batch
-    padding, same as `DataCollatorWithPadding` used during training."""
+    padding, same as `DataCollatorWithPadding` used during training.
+
+    Returns raw logits in whatever order the checkpoint's own head produces
+    them — `resolve_label_order` permutes them into `CLASS_ORDER` afterwards,
+    so this function does not need to know which checkpoint it is running.
+    """
     import numpy as np
     import torch
 
@@ -245,14 +303,23 @@ def predict_logits(
     with torch.no_grad():
         for start in range(0, len(rows), batch_size):
             batch = rows[start:start + batch_size]
-            encoded = tokenizer(
-                [r.premise_he for r in batch],
-                [r.hypothesis_he for r in batch],
-                truncation=True, max_length=max_length, padding=True,
-                return_tensors="pt",
-            )
-            if not use_token_type_ids:
-                encoded.pop("token_type_ids", None)
+            if encoding == JOINED:
+                # Exactly the released checkpoint's own training/inference
+                # recipe: one joined string, not two tokenizer arguments.
+                texts = [f"{r.premise_he} [SEP] {r.hypothesis_he} [SEP]" for r in batch]
+                encoded = tokenizer(
+                    texts, truncation=True, max_length=max_length, padding=True,
+                    return_tensors="pt",
+                )
+            else:
+                encoded = tokenizer(
+                    [r.premise_he for r in batch],
+                    [r.hypothesis_he for r in batch],
+                    truncation=True, max_length=max_length, padding=True,
+                    return_tensors="pt",
+                )
+                if not use_token_type_ids:
+                    encoded.pop("token_type_ids", None)
             encoded = {k: v.to(device) for k, v in encoded.items()}
             logits_chunks.append(model(**encoded).logits.detach().cpu().numpy())
     return np.concatenate(logits_chunks, axis=0)
@@ -262,33 +329,60 @@ def evaluate_checkpoint(
     checkpoint: str,
     test_path: str,
     expected_n: int = 883,
+    subfolder: Optional[str] = None,
+    encoding: Optional[str] = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
-    max_length: int = DEFAULT_MAX_LENGTH,
+    max_length: Optional[int] = None,
     device: str | None = None,
 ) -> Tuple[dict, List[dict]]:
     """Load, run, score. Returns (summary dict, predictions rows) — the exact
-    contents of the two result files, before either is written."""
+    contents of the two result files, before either is written.
+
+    `encoding=None` auto-detects the same way `check_nli_labels.py` does:
+    `JOINED` for the released checkpoint, `PAIR` for anything else — pass it
+    explicitly to override. `max_length=None` follows suit: `PAIR` defaults
+    to the 128 tokens training actually used, `JOINED` to the checkpoint's
+    own `max_position_embeddings`, matching how `nli_rerank.py` calls it.
+    """
     import numpy as np
     import torch
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     rows = check_test_file(test_path, expected_n)
 
-    model, tokenizer = load_checkpoint(checkpoint)
-    verify_label_mapping({int(k): v for k, v in model.config.id2label.items()})
+    encoding = encoding or (JOINED if checkpoint == NLIReranking.DEFAULT_MODEL_NAME else PAIR)
+    if subfolder is None and checkpoint == NLIReranking.DEFAULT_MODEL_NAME:
+        subfolder = NLIReranking.DEFAULT_MODEL_SUBFOLDER
+
+    model, tokenizer = load_checkpoint(checkpoint, subfolder)
+    perm, label_source = resolve_label_order({int(k): v for k, v in model.config.id2label.items()})
     model.to(device)
 
     type_vocab_size = getattr(model.config, "type_vocab_size", 1)
     use_segments = type_vocab_size > 1
-    encoding = pair_encoding_for(type_vocab_size)
+    pair_encoding = encoding if encoding == JOINED else pair_encoding_for(type_vocab_size)
+    if max_length is None:
+        max_length = (int(model.config.max_position_embeddings) if encoding == JOINED
+                      else DEFAULT_MAX_LENGTH)
 
-    logits = predict_logits(rows, model, tokenizer, use_segments, batch_size, max_length, device)
+    logits = predict_logits(rows, model, tokenizer, encoding, use_segments,
+                             batch_size, max_length, device)
+    logits = logits[:, perm]  # into (entailment, neutral, contradiction) order
     probs = softmax(logits)
     y_true = np.array([LABEL_IDS[r.label] for r in rows])
     y_pred = probs.argmax(axis=1)
     test_loss = cross_entropy(probs, y_true)
 
-    summary = build_summary(y_true, y_pred, checkpoint, test_path, encoding, test_loss)
+    caveat = None
+    if checkpoint == NLIReranking.DEFAULT_MODEL_NAME:
+        caveat = (
+            "this checkpoint was fine-tuned on all of HebNLI rather than a train/test "
+            "split, so this test set was very likely part of its own training data - "
+            "treat this score as a reference point, not a fair comparison"
+        )
+
+    summary = build_summary(y_true, y_pred, checkpoint, test_path, pair_encoding,
+                             test_loss, label_source, caveat)
     predictions = build_predictions_rows(rows, y_true, y_pred, probs)
     return summary, predictions
 
@@ -297,12 +391,26 @@ def evaluate_checkpoint(
 # CLI
 # --------------------------------------------------------------------------
 
+def _default_key(checkpoint: str) -> str:
+    """A filesystem-safe stand-in for `checkpoint`, for default output paths.
+    A local directory keeps just its basename (`alephbert-hebnli-clean`); an
+    HF hub id keeps the owner too (`oriel9p--AlephBERT-FT-HebNLI-LCHAIM`) so
+    the two checkpoints in a comparison never collide on the same filename.
+    """
+    if Path(checkpoint).exists():
+        return Path(checkpoint).name
+    return checkpoint.replace("/", "--")
+
+
 def _print_summary(summary: dict, device: str) -> None:
     print(f"checkpoint           {summary['checkpoint']}")
     print(f"test file            {summary['test_file']}")
     print(f"examples             {summary['n_examples']}")
     print(f"device               {device}")
     print(f"pair encoding        {summary['pair_encoding']}")
+    print(f"label source         {summary['label_source']}")
+    if summary.get("caveat"):
+        print(f"\n[caveat] {summary['caveat']}")
     print(f"\naccuracy             {summary['accuracy']:.4f}")
     print(f"macro precision      {summary['macro_precision']:.4f}")
     print(f"macro recall         {summary['macro_recall']:.4f}")
@@ -331,12 +439,20 @@ def main() -> int:
                     help="output of `python -m src.nli.prepare_data --split test`")
     ap.add_argument("--expected-n", type=int, default=883,
                     help="fail if the test file has any other row count; 0 disables")
+    ap.add_argument("--subfolder", default=None,
+                    help="subfolder inside the HF repo (default: 'AlephBERT' for the "
+                         "released checkpoint, none otherwise). Pass '' to force none")
+    ap.add_argument("--pair-encoding", default=None, choices=[JOINED, PAIR],
+                    help=f"default: {JOINED} for the released checkpoint, {PAIR} otherwise")
     ap.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    ap.add_argument("--max-length", type=int, default=DEFAULT_MAX_LENGTH)
+    ap.add_argument("--max-length", type=int, default=None,
+                    help="default: 128 (matches training) under pair encoding, the "
+                         "checkpoint's own max_position_embeddings under joined")
     ap.add_argument("--device", default=None, help="default: cuda if available, else cpu")
     ap.add_argument("--summary-out", default=None,
-                    help="default: results/nli_test_<checkpoint dir name>.json")
-    ap.add_argument("--predictions-out", default="results/nli_test_predictions.csv")
+                    help="default: results/nli_test_<checkpoint>.json")
+    ap.add_argument("--predictions-out", default=None,
+                    help="default: results/nli_test_<checkpoint>_predictions.csv")
     args = ap.parse_args()
 
     import torch  # lazy, just to resolve the device for the printed line
@@ -347,19 +463,23 @@ def main() -> int:
         checkpoint=args.checkpoint,
         test_path=args.test,
         expected_n=args.expected_n,
+        subfolder=args.subfolder,
+        encoding=args.pair_encoding,
         batch_size=args.batch_size,
         max_length=args.max_length,
         device=device,
     )
 
-    summary_out = args.summary_out or f"results/nli_test_{Path(args.checkpoint).name}.json"
+    key = _default_key(args.checkpoint)
+    summary_out = args.summary_out or f"results/nli_test_{key}.json"
+    predictions_out = args.predictions_out or f"results/nli_test_{key}_predictions.csv"
     Path(summary_out).parent.mkdir(parents=True, exist_ok=True)
     Path(summary_out).write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_predictions_csv(predictions, args.predictions_out)
+    write_predictions_csv(predictions, predictions_out)
 
     _print_summary(summary, device)
     print(f"\nsummary              -> {summary_out}")
-    print(f"predictions          -> {args.predictions_out}")
+    print(f"predictions          -> {predictions_out}")
     return 0
 
 

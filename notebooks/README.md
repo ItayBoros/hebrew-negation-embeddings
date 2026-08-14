@@ -36,3 +36,13 @@ Must never be pointed at `data/probe/review_raw.csv` (689 mined candidates) or
 `data/probe/splits/test.jsonl` (151 negation-probe items) — see
 `data/probe/README.md` for why those are held out of NLI fine-tuning in the first
 place; scoring the test set on them measures something else entirely.
+
+## `04_compare_nli_checkpoints.ipynb` (B)
+
+Two comparisons against the released checkpoint (`oriel9p/AlephBERT-FT-HebNLI-LCHAIM`,
+`nli_rerank.py`'s old default): HebNLI test-set accuracy (labelled with a caveat —
+the released checkpoint was fine-tuned on all of HebNLI, so this test set was very
+likely part of its own training data), and the actual `nli_rerank` negation-probe
+score, both checkpoints side by side in `results/results_nli_rerank.csv` via
+`run_eval.py`'s `--nli-model`/`--nli-subfolder`/`--nli-encoding` flags. Read-only —
+mounts Drive for our checkpoint, never writes to it.
