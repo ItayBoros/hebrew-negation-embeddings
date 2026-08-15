@@ -89,10 +89,14 @@ def run_baseline_and_projection(
 
         embedder = get_embedder(model)
         base = Baseline()
+        # cfg["select"] is proj.selection as *reported* after fit (e.g. "cv5",
+        # since NegationProjection.selection = f"cv{n_folds}") -- the
+        # constructor's `select` kwarg only accepts the literal "cv"/"train".
+        select_kwarg = "cv" if cfg["select"].startswith("cv") else "train"
         proj = NegationProjection(
             direction_method=cfg["direction"],
             center=cfg["center"] == "True",
-            select=cfg["select"],
+            select=select_kwarg,
             constrain_unrel=True,
             unrel_threshold=float(threshold),
         )
