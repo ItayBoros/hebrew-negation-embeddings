@@ -46,3 +46,27 @@ likely part of its own training data), and the actual `nli_rerank` negation-prob
 score, both checkpoints side by side in `results/results_nli_rerank.csv` via
 `run_eval.py`'s `--nli-model`/`--nli-subfolder`/`--nli-encoding` flags. Read-only —
 mounts Drive for our checkpoint, never writes to it.
+
+Both of its `nli_rerank` rows use `lam=1.0`, the old default — pure NLI, where the
+embedder contributes nothing to the score. `05` is what replaces that with a
+selected weight.
+
+## `05_nli_lambda.ipynb` (B)
+
+Selects `nli_rerank`'s lambda, then runs the locked final evaluation — the two
+halves separated by a commit, in that order, and not reversible afterwards.
+
+Section 4 sweeps `0.00 … 1.00` on **dev only** (`splits/train.jsonl`,
+`hebrew_stsb_dev.csv`), independently for each of the four frozen embedders, and
+locks one lambda per model into `results/nli_selected_lambdas.json` beside the
+full sweep in `results/nli_lambda_dev.csv`. Section 6 reads that lock and
+evaluates two configurations per model — `lambda=0` and the selected lambda — on
+`splits/test.jsonl` and `hebrew_stsb_test.csv`, writing
+`results/nli_lambda_test.csv`. It has no code path that can write a selection,
+and `lambda_sweep` raises outright if a test file reaches the dev stage.
+
+Read-only with respect to the NLI checkpoint: it mounts Drive to load the clean
+HebNLI model and only runs it forward. Colab because that checkpoint lives on
+Drive and the four embedders are several GB.
+
+Why the rule is what it is: `LAMBDA_SELECTION.md` in the repo root.

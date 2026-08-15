@@ -35,12 +35,17 @@ emits a 1 for the second sequence. That is very likely why the released
 checkpoint's authors flattened the pair in the first place.
 
 Loading is lazy so importing the evaluation harness does not load PyTorch or
-download the checkpoint. Lambda tuning is intentionally not implemented yet.
+download the checkpoint.
+
+Lambda is selected, not guessed: ``src/harness/lambda_sweep.py`` sweeps the grid
+on the development splits and locks one value per embedding model. It drives this
+class through ``nli_scores``, the batched entry point, because the sweep needs
+every pair's NLI term exactly once and then reuses it for all 21 lambdas.
 """
 from __future__ import annotations
 
 import re
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .base import Intervention
 from .baseline import cosine
@@ -159,52 +164,104 @@ class NLIReranking(Intervention):
         # IndexError rather than warning.
         self._use_token_type_ids = getattr(config, "type_vocab_size", 1) > 1
 
-    def raw_label_probabilities(
-        self,
-        premise: str,
-        hypothesis: str,
-    ) -> tuple[float, ...]:
-        """Return probabilities in raw LABEL_0/LABEL_1/LABEL_2 order."""
-        cache_key = (premise, hypothesis)
-        cached = self._raw_probability_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        self._load()
-
-        import torch
-
+    def _tokenize(self, pairs: Sequence[Tuple[str, str]]) -> dict:
+        """Encode ordered (premise, hypothesis) pairs into a padded batch."""
         max_length = int(self._model.config.max_position_embeddings)
         if self.pair_encoding == JOINED:
             # Exactly the pair construction used in the released checkpoint's
             # training and inference code before calling their tokenizer.
             inputs = self._tokenizer(
-                f"{premise} [SEP] {hypothesis} [SEP]",
+                [f"{premise} [SEP] {hypothesis} [SEP]" for premise, hypothesis in pairs],
                 return_tensors="pt",
                 truncation=True,
+                padding=True,
                 max_length=max_length,
             )
         else:
             # What train_nli.py does: two arguments, so the tokenizer places
             # [SEP] itself and truncates the longer side rather than the tail.
             inputs = self._tokenizer(
-                premise, hypothesis,
+                [premise for premise, _ in pairs],
+                [hypothesis for _, hypothesis in pairs],
                 return_tensors="pt",
                 truncation=True,
+                padding=True,
                 max_length=max_length,
             )
             if not self._use_token_type_ids:
                 inputs.pop("token_type_ids", None)
 
-        inputs = {name: value.to(self._device) for name, value in inputs.items()}
+        return {name: value.to(self._device) for name, value in inputs.items()}
 
-        with torch.inference_mode():
-            logits = self._model(**inputs).logits[0]
-            raw_probabilities = torch.softmax(logits, dim=-1).detach().cpu()
+    def raw_label_probabilities(
+        self,
+        premise: str,
+        hypothesis: str,
+    ) -> tuple[float, ...]:
+        """Return probabilities in raw LABEL_0/LABEL_1/LABEL_2 order."""
+        return self.raw_label_probabilities_batch([(premise, hypothesis)])[0]
 
-        probabilities = tuple(float(value) for value in raw_probabilities)
-        self._raw_probability_cache[cache_key] = probabilities
-        return probabilities
+    def raw_label_probabilities_batch(
+        self,
+        pairs: Sequence[Tuple[str, str]],
+        batch_size: int = 32,
+        progress: Optional[Callable[[int, int], None]] = None,
+    ) -> List[tuple[float, ...]]:
+        """Same as `raw_label_probabilities`, one forward pass per `batch_size`.
+
+        The lambda sweep asks for thousands of pairs at once (1,804 on the
+        development splits alone), and one forward pass each is minutes of GPU
+        time spent on launch overhead rather than on arithmetic.
+
+        Only pairs missing from the cache are computed, deduplicated first, so
+        calling this twice with overlapping inputs costs nothing the second
+        time. Padding is masked out, so a pair's probabilities do not depend on
+        what it was batched with.
+        """
+        pairs = [(premise, hypothesis) for premise, hypothesis in pairs]
+        # dict.fromkeys and not set(): the batch order stays the input order,
+        # which is what makes a progress line mean anything.
+        missing = [p for p in dict.fromkeys(pairs) if p not in self._raw_probability_cache]
+        if missing:
+            self._load()
+
+            import torch
+
+            for start in range(0, len(missing), batch_size):
+                chunk = missing[start:start + batch_size]
+                inputs = self._tokenize(chunk)
+                with torch.inference_mode():
+                    logits = self._model(**inputs).logits
+                    raw_probabilities = torch.softmax(logits, dim=-1).detach().cpu()
+                for pair, row in zip(chunk, raw_probabilities):
+                    self._raw_probability_cache[pair] = tuple(float(value) for value in row)
+                if progress is not None:
+                    progress(min(start + batch_size, len(missing)), len(missing))
+
+        return [self._raw_probability_cache[pair] for pair in pairs]
+
+    def nli_scores(
+        self,
+        pairs: Sequence[Tuple[str, str]],
+        batch_size: int = 32,
+        progress: Optional[Callable[[int, int], None]] = None,
+    ) -> List[float]:
+        """`P(entailment) - P(contradiction)` per ordered pair, in [-1, 1].
+
+        The lambda-independent half of `score`: the blend's NLI term does not
+        move with lambda, so a sweep computes this once per pair and reuses it
+        across the whole grid.
+        """
+        if not pairs:
+            return []
+        raw = self.raw_label_probabilities_batch(pairs, batch_size=batch_size,
+                                                  progress=progress)
+        # No-op after the batch call above, except when the cache was seeded
+        # externally: label_ids is only authoritative once the config has been read.
+        self._load()
+        entailment = self.label_ids["entailment"]
+        contradiction = self.label_ids["contradiction"]
+        return [float(row[entailment] - row[contradiction]) for row in raw]
 
     def label_names(self) -> Dict[int, str]:
         """Class index -> label name, as actually in force after loading.

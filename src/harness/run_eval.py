@@ -3,8 +3,14 @@ End-to-end evaluation runner.  ===  PERSON B  ===
 
 Loads the probe, and for each (embedder x intervention):
   - fit the intervention on the TRAIN split
-  - measure cosine_gap + nevir_rank (+ sts_corr when wired) on the TEST split
+  - measure cosine_gap + nevir_rank on the TEST split, and sts_corr on the
+    Hebrew STS *dev* split (`--sts`, `'' `to skip)
   - write one row to results/results.csv
+
+For `nli_rerank` specifically, prefer `src/harness/lambda_sweep.py`: it selects
+lambda instead of taking it on the command line, and it caches both halves of the
+blend per pair instead of re-running the classifier through `score_fn` for every
+one of the 1,500 STS pairs.
 
 Run the plumbing offline, no downloads:
     python -m src.harness.run_eval --models fake --probe data/probe/mock_probe.jsonl
@@ -37,6 +43,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from ..schema import load_probe, split_items, ProbeItem
+from . import sts as sts_data
 from .models import get_embedder
 from .metrics import cosine_gap, nevir_rank, sts_corr
 
@@ -50,7 +57,7 @@ from ..interventions.nli_rerank import JOINED, PAIR, NLIReranking
 #: run order.
 CSV_FIELDS = [
     "model", "intervention", "n_test", "sim_paraphrase", "sim_negation",
-    "cosine_gap", "nevir_rank", "sts_pearson", "sts_spearman",
+    "cosine_gap", "nevir_rank", "sts_split", "sts_n", "sts_pearson", "sts_spearman",
     "nli_checkpoint", "nli_subfolder", "nli_encoding", "nli_lam",
 ]
 
@@ -105,11 +112,19 @@ def append_or_replace(new_rows: List[dict], path: str | Path,
 
 def evaluate(probe_path: str, model_keys: List[str], intervention_names: List[str],
              out_csv: str = "results/results.csv",
-             nli_kwargs: Optional[dict] = None) -> None:
+             nli_kwargs: Optional[dict] = None,
+             sts_path: Optional[str] = sts_data.DEV_PATH) -> None:
     items = load_probe(probe_path)
     train, test = split_items(items, "train"), split_items(items, "test")
     if not test:
         test = items  # mock file may be tiny; fall back so plumbing still runs
+
+    # The trade-off guard, finally connected: every earlier results table has
+    # blank sts_* cells because this used to be `[]`. Defaults to the *dev*
+    # split — this runner is the development loop, and the STS test split
+    # belongs to the locked final evaluation in lambda_sweep.py.
+    sts_pairs = sts_data.load_sts(sts_path) if sts_path else []
+    print(f"sts: {len(sts_pairs)} pairs from {sts_path or '(none)'}")
 
     Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -121,10 +136,11 @@ def evaluate(probe_path: str, model_keys: List[str], intervention_names: List[st
                 score_fn = lambda a, b, _i=interv: _i.score(a, b, embedder)
                 gap = cosine_gap(test, score_fn)
                 nevir = nevir_rank(test, score_fn)
-                sts = sts_corr([], score_fn)  # TODO(B): pass a real Hebrew STS set
+                sts = sts_corr(sts_pairs, score_fn)
                 rows.append({
                     "model": mkey, "intervention": interv.name,
                     "n_test": len(test), **gap, "nevir_rank": nevir,
+                    "sts_split": sts_path or "", "sts_n": sts["n"],
                     "sts_pearson": sts["pearson"], "sts_spearman": sts["spearman"],
                     "nli_checkpoint": getattr(interv, "model_name", ""),
                     "nli_subfolder": getattr(interv, "model_subfolder", "") or "",
@@ -155,7 +171,11 @@ def main():
     ap.add_argument("--nli-encoding", default=None, choices=[JOINED, PAIR],
                     help=f"default: {JOINED} for the released checkpoint, {PAIR} otherwise")
     ap.add_argument("--nli-lam", type=float, default=1.0,
-                    help="0 = pure cosine, 1 = pure NLI (default), see nli_rerank.py")
+                    help="0 = pure cosine, 1 = pure NLI (default), see nli_rerank.py. "
+                         "Selecting this properly is what src/harness/lambda_sweep.py does")
+    ap.add_argument("--sts", default=sts_data.DEV_PATH,
+                    help="Hebrew STS csv for the trade-off guard; '' to skip it. The "
+                         "test split belongs to lambda_sweep.py's locked final run")
     args = ap.parse_args()
 
     encoding = args.nli_encoding or (JOINED if args.nli_model == NLIReranking.DEFAULT_MODEL_NAME
@@ -164,7 +184,8 @@ def main():
         lam=args.nli_lam, model_name=args.nli_model,
         model_subfolder=args.nli_subfolder or None, pair_encoding=encoding,
     )
-    evaluate(args.probe, args.models, args.interventions, args.out, nli_kwargs=nli_kwargs)
+    evaluate(args.probe, args.models, args.interventions, args.out,
+             nli_kwargs=nli_kwargs, sts_path=args.sts or None)
 
 
 if __name__ == "__main__":

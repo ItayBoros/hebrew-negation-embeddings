@@ -132,12 +132,35 @@ ids at all, since it was pretrained with `type_vocab_size=1`).
 
 `notebooks/02_train_nli.ipynb` runs the whole path on Colab.
 
+## Selecting lambda for nli_rerank
+
+`nli_rerank` blends cosine with a directional NLI judgement, weighted by
+`lambda`. The weight is selected, not guessed — on the development splits only,
+then locked before anything touches a test split:
+
+```bash
+# dev: sweep 0.00..1.00 on probe-train + STS-dev, one lambda per embedder
+python -m src.harness.lambda_sweep --stage dev \
+    --models multilingual-e5 labse alephbert-sentence sambert \
+    --nli-model /content/drive/MyDrive/hebrew-negation/checkpoints/alephbert-hebnli-clean \
+    --nli-subfolder "" --nli-encoding pair
+
+# commit results/nli_lambda_dev.csv + results/nli_selected_lambdas.json, then:
+python -m src.harness.lambda_sweep --stage test   # same flags
+```
+
+The rule: among lambdas whose STS-dev Spearman stays within 0.02 of that model's
+own cosine-only Spearman, the highest `pairwise_accuracy`, ties broken by
+`mean_gap` and then by the smallest lambda. **LAMBDA_SELECTION.md** has the full
+argument; `notebooks/05_nli_lambda.ipynb` runs both stages on Colab.
+
 ## Tests
 
 ```bash
 python -m tests.test_data_pipeline      # mine -> finalize -> validate, offline
 python -m tests.test_projection         # projection, on a planted direction
 python -m tests.test_nli_data           # NLI contamination filters, offline
+python -m tests.test_lambda_sweep       # lambda selection + the dev/test wall
 python -m src.data.negation --selftest  # negation lexicon only
 ```
 
@@ -153,6 +176,8 @@ something `FakeEmbedder` cannot tell you, since it is only noise.
 - `src/nli/` — HebNLI decontamination and NLI fine-tuning (B).
 - `src/data/` — HebNLI loading, Hebrew negation detection, probe mining (A).
 - `data/probe/` — the negation probe (A); `mock_probe.jsonl` is a stand-in.
-- `notebooks/` — Colab wrappers: `01` builds the probe (A), `02` trains NLI (B).
+- `notebooks/` — Colab wrappers: `01` builds the probe (A), `02` trains NLI,
+  `05` selects lambda and runs the locked final evaluation (B).
+- **LAMBDA_SELECTION.md** — why `nli_rerank`'s lambda is the value it is.
 
 See **PLAN.md** for the full work split, Git workflow, and milestones.

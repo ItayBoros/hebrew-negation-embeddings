@@ -18,7 +18,7 @@ for any intervention identically.
 from __future__ import annotations
 
 from statistics import mean
-from typing import Callable, List, Tuple
+from typing import Callable, List, Sequence, Tuple
 
 from ..schema import ProbeItem
 
@@ -122,19 +122,31 @@ def nevir_rank_full(
 def sts_corr(sts_pairs: List[Tuple[str, str, float]], score_fn: ScoreFn) -> dict:
     """sts_pairs: list of (sentence_a, sentence_b, gold_similarity).
 
-    TODO(B): wire a Hebrew STS set here (or a held-out slice of HebNLI mapped
-    to graded similarity). Returns Pearson/Spearman of score_fn vs gold.
+    Returns Pearson/Spearman of score_fn vs gold. Load the real Hebrew pairs
+    with `src.harness.sts.load_sts` — passing `[]` here reports nothing and is
+    what left every sts_* column blank in the earlier result tables.
+    """
+    preds = [score_fn(a, b) for a, b, _ in sts_pairs]
+    gold = [g for _, _, g in sts_pairs]
+    return sts_corr_from_scores(preds, gold)
+
+
+def sts_corr_from_scores(preds: Sequence[float], gold: Sequence[float]) -> dict:
+    """Pearson/Spearman for scores that have already been computed.
+
+    The lambda sweep evaluates 21 blends of the *same* two cached components, so
+    it must not go back through `score_fn` (that would re-encode 1,500 pairs per
+    lambda). Both entry points end here, so the reported correlation is computed
+    one way only.
     """
     try:
         from scipy.stats import pearsonr, spearmanr
     except Exception:  # scipy not installed in a bare env
-        return {"pearson": None, "spearman": None, "n": len(sts_pairs)}
-    if not sts_pairs:
+        return {"pearson": None, "spearman": None, "n": len(preds)}
+    if len(preds) == 0:  # not `if not preds`: preds is often a numpy array
         return {"pearson": None, "spearman": None, "n": 0}
-    preds = [score_fn(a, b) for a, b, _ in sts_pairs]
-    gold = [g for _, _, g in sts_pairs]
     return {
         "pearson": float(pearsonr(preds, gold)[0]),
         "spearman": float(spearmanr(preds, gold)[0]),
-        "n": len(sts_pairs),
+        "n": len(preds),
     }
