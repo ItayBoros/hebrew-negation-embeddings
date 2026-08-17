@@ -31,3 +31,7 @@ These are the contracts both halves depend on. See CONTRIBUTING.md for the proce
 - `README.md`, `PLAN.md`, `requirements.txt`, `.gitignore`
 - `src/interventions/baseline.py`
 - `data/probe/mock_probe.jsonl` (plumbing fixture)
+- `src/report/` and `results/final_comparison.csv` — pulls the locked numbers
+  from `results/nli_lambda_test.csv` (B) and `results/projection_ablation.csv`
+  (A) into one table for `05_results.md`. Reads both files, computes nothing
+  new, writes to neither.
