@@ -50,6 +50,8 @@ negative result specific to this embedder.
 
 ## `nli_rerank`: locked test-set numbers
 
+**Classifier choice.** Our decision to train a dedicated classifier is supported by its stronger performance on the same 883-pair clean HebNLI test split. Our classifier reaches 79.6% accuracy (macro-F1 79.4%), compared with 72.7% accuracy (macro-F1 72.2%) for oriel9p/AlephBERT-FT-HebNLI-LCHAIM (Methodology). Although this is not a strictly fair comparison, the result provides evidence that our classifier is better suited to the task and supports our choice to develop a task-specific model.
+
 Selected λ per model (dev-stage selection, STS-dev Spearman constrained to
 within 0.02 of that model's own λ=0 baseline), evaluated once on test:
 

@@ -100,6 +100,14 @@ length 128, seed 17. Test accuracy 79.6% (macro-F1 79.4%) on the clean
 HebNLI test split (883 pairs). Checkpoint: `CodingBz/alephbert-hebnli-clean`
 on Hugging Face.
 
+**Why not the released checkpoint.** `oriel9p/AlephBERT-FT-HebNLI-LCHAIM` is
+a ready-made alternative: AlephBERT fine-tuned on HebNLI together with
+LCHAIM (Malul et al., 2025), a Hebrew NLI dataset built to evaluate
+long-context reasoning - coreference, temporal, logical, and analytical -
+over multi-sentence passages translated from the English ConTRoL dataset.
+That training objective is not aligned with our task: our probe's targets
+have a median of 6 tokens, not long premises. We therefore fine-tune our own classifier instead. which would be more accurate to our task.
+
 **Decontamination.** The probe is mined from HebNLI's own `train` split, so
 any NLI model fine-tuned on ordinary HebNLI has already seen the probe's
 `(target, negation)` pairs under the gold `contradiction` label — scoring
