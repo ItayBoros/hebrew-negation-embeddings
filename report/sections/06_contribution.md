@@ -64,8 +64,15 @@ Hebrew uses to express negation.
   measures for `nli_rerank`. `projection` would benefit from the same
   Hebrew-STS guard `nli_rerank` already has; we did not have time to wire it
   in for this submission.
-- **Hebrew STS-B is a translation** of the English benchmark with inherited
-  English gold scores, not natively annotated in Hebrew.
+- **Hebrew STS-B is a translation** of the English benchmark (Agirre et al.,
+  2017) with inherited English gold scores, not natively annotated in
+  Hebrew. Machine-translated STS benchmarks are known to introduce
+  translation artifacts and can shift some semantic distinctions present in
+  the source language (Isbister & Sahlgren, 2020). The two-translator-plus-
+  adjudicator pipeline and human spot-check described in Methodology reduce
+  this risk, but we treat the inherited scores as a practical cross-lingual
+  approximation rather than assume Hebrew speakers would assign identical
+  scores in every case.
 - **`multilingual-e5`'s unresolved case.** No γ in our search grid keeps
   `projection`'s collapse guard satisfied for this model; whether a
   different direction-estimation method, a narrower grid, or a

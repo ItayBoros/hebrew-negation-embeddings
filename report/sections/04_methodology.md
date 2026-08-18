@@ -24,6 +24,35 @@ guard exists because a fix that inflates `cosine_gap` by damaging the
 representation generally is not a fix; see the projection ablation below for
 why this is not a hypothetical concern.
 
+## Hebrew STS-B translation
+
+The English STS Benchmark aggregates sentence pairs from the SemEval
+Semantic Textual Similarity shared tasks run between 2012 and 2017 (Agirre
+et al., 2017); per the benchmark's own citation terms, we also credit the
+STS website, http://ixa2.si.ehu.eus/stswiki. We translate its official `dev`
+(1,500 pairs) and `test` (1,379 pairs) splits into Hebrew, keeping the
+original pair IDs, splits, and gold similarity scores untouched; the 5,749
+training pairs are not translated, since no model here is trained or tuned
+on STS-B itself.
+
+Each pair goes through two independent LLM translators with no visibility
+into each other's output, then a third LLM agent adjudicates: for each
+sentence it keeps the stronger candidate or merges the two into a corrected
+Hebrew pair when neither candidate is adequate. All three roles ran on
+GPT-5.6 Sol in Extra High mode. Gold scores are attached only after
+adjudication and automated validation are complete, and are never adjusted
+to fit a translation. A human reviewer additionally inspected roughly 200
+translated items for correctness and preservation of meaning, and found
+them satisfactory.
+
+The benchmark's gold scores are released under a Creative Commons
+Attribution-ShareAlike 4.0 license; the sentence text itself inherits
+source-specific licenses — the Microsoft Research Paraphrase and Video
+Description corpora, European Media Monitor news headlines, the DEFT
+project, PASCAL VOC-2008 image captions, the Stanford Natural Language
+Inference corpus, and Stack Exchange user content, depending on which
+STS-B genre a given pair comes from.
+
 ## Intervention 1: `projection` (representation-space edit)
 
 Estimates a "negation direction" `d` from the train split — either the
@@ -91,9 +120,9 @@ among λ whose Hebrew-STS-dev Spearman correlation stays within 0.02
 (absolute) of that same embedder's own λ=0 Spearman, take the highest
 `pairwise_accuracy`; ties broken by the largest mean gap, then by the
 smallest λ. The 0.02 budget was fixed before the sweep ran. Selection uses
-`splits/train.jsonl` (152 items) and the STS-B *dev* split (1,500 Hebrew
-pairs, translated from English STS-B and STS-B `dev` gold scores); the
-selected λ is then locked and evaluated exactly once on `splits/test.jsonl`
+`splits/train.jsonl` (152 items) and the Hebrew STS-B `dev` split described
+above (1,500 pairs); the selected λ is then locked and evaluated exactly
+once on `splits/test.jsonl`
 (151 items) and STS-B *test* (1,379 pairs) — a stage boundary enforced in
 code (the test stage refuses to run without a prior, matching dev-stage
 selection file).
