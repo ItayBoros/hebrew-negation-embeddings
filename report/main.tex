@@ -15,7 +15,7 @@
 \newcommand{\heb}[1]{{\hebrewfont #1}}
 
 \title{Repairing the Negation Blind Spot in Hebrew Text Embeddings}
-\author{Itay Boros (ID.\ TODO), Shachar Ben Zur (ID.\ TODO)}
+\author{Itay Boros (ID.\ 211869987), Shachar Ben Zur (ID.\ 212373005)}
 \date{Submitted as final project report for the NLP course, Reichman University, 2026}
 
 \begin{document}
@@ -223,8 +223,13 @@ neg-raising & matrix-clause negation of a raising predicate & 2\% \\
 
 Inter-annotator agreement was measured via Cohen's kappa on an independent
 40-item random sample double-annotated by both authors against a fixed
-guideline document (kappa value: TODO --- insert once both annotation
-files are complete).
+guideline document: raw agreement 77.5\% (31/40), $\kappa = 0.543$
+(moderate). Of the 9 disagreements, most turned on how strictly to read
+``differs only in polarity'' --- one author accepted a few candidates with a
+minor synonym-level verb change alongside the negation marker, the other
+rejected any lexical drift beyond the marker itself; a smaller cluster
+concerned whether a title-like fragment with no verb counts as a
+``proposition'' at all.
 
 Because the probe is mined from HebNLI's own train split, any NLI model
 later fine-tuned on HebNLI for \texttt{nli\_rerank} risks having already
@@ -241,6 +246,27 @@ items where $\mathrm{score}(\mathit{target}, \mathit{paraphrase}) >
 \mathrm{score}(\mathit{target}, \mathit{negation})$, chance = 0.5 --- and,
 where wired, Pearson/Spearman correlation against a Hebrew Semantic
 Textual Similarity set as a trade-off guard.
+
+\subsection{Hebrew STS-B translation}
+
+The English STS Benchmark aggregates sentence pairs from the SemEval
+Semantic Textual Similarity shared tasks run between 2012 and 2017
+\citep{agirre2017semeval}. We translate its official \texttt{dev}
+(1{,}500 pairs) and \texttt{test} (1{,}379 pairs) splits into Hebrew,
+keeping the original pair IDs, splits, and gold similarity scores
+untouched; the 5{,}749 training pairs are not translated, since no model
+here is trained or tuned on STS-B itself. Each pair goes through two
+independent LLM translators with no visibility into each other's output,
+then a third LLM agent adjudicates --- keeping the stronger candidate or
+merging the two into a corrected Hebrew pair when neither is adequate.
+Gold scores are attached only after adjudication and automated validation
+are complete, and are never adjusted to fit a translation. A human reviewer
+additionally inspected roughly 200 translated items for correctness and
+preservation of meaning, and found them satisfactory. Machine-translated
+STS benchmarks are known to introduce translation artifacts
+\citep{isbister2020swedish}; we treat the inherited English gold scores as
+a practical cross-lingual approximation rather than assume Hebrew speakers
+would assign identical scores in every case (see Limitations).
 
 \subsection{Intervention 1: \texttt{projection} (representation-space edit)}
 
@@ -273,7 +299,16 @@ pure cosine (the baseline); $\lambda=1$ discards the embedder entirely.
 \textbf{Classifier.} AlephBERT fine-tuned for 3-way NLI on HebNLI
 (lr $=2\times10^{-5}$, batch size 32, 2 epochs, sequence length 128).
 Test accuracy 79.6\% (macro-F1 79.4\%) on the clean HebNLI test split (883
-pairs). \textbf{Decontamination.} All three HebNLI splits used for
+pairs), against 72.7\% (macro-F1 72.2\%) for the ready-made alternative,
+\texttt{oriel9p/AlephBERT-FT-HebNLI-LCHAIM}, on the same test split
+(Section \ref{sec:results}). \textbf{Why not the released checkpoint.}
+That checkpoint is AlephBERT fine-tuned on HebNLI together with LCHAIM
+\citep{malul2025lchaim}, a Hebrew NLI dataset built to evaluate
+long-context reasoning over multi-sentence passages translated from
+English ConTRoL. That training objective is not aligned with our task ---
+our probe's targets have a median of 6 tokens, not long premises --- so we
+fine-tune our own classifier instead, which the comparison above supports.
+\textbf{Decontamination.} All three HebNLI splits used for
 fine-tuning are filtered by the 689 mined promptIDs, plus a text-level
 audit catching residual overlap under a different promptID (9/1/0 rows
 dropped from train/val/test). Final fine-tuning set: 297{,}990 train /
@@ -328,6 +363,13 @@ grid's lowest-unrel point (0.59--0.79). We report this as a negative
 result specific to this embedder.
 
 \subsection{\texttt{nli\_rerank}: locked test-set numbers}
+
+Our fine-tuned classifier reaches 79.6\% test accuracy (macro-F1 79.4\%) on
+the clean HebNLI test split, against 72.7\% (macro-F1 72.2\%) for the
+released \texttt{LCHAIM} checkpoint on the same split --- not a strictly
+fair comparison, since the two were trained for different objectives, but
+evidence that a task-specific classifier was the right call over the
+ready-made alternative.
 
 \begin{table}[h]
 \centering
@@ -443,8 +485,13 @@ per-category slices (3--4 items per model) are suggestive, not conclusive.
 sim\_unrelated is a proxy, not a real similarity benchmark; \texttt{projection}
 would benefit from the same Hebrew-STS guard \texttt{nli\_rerank} already
 has, which we did not have time to wire in. Hebrew STS-B is a translation
-with inherited English gold scores, not natively annotated. No $\gamma$ in
-our search grid resolves \texttt{multilingual-e5}'s collapse guard.
+of the English benchmark \citep{agirre2017semeval} with inherited English
+gold scores, not natively annotated in Hebrew; machine-translated STS
+benchmarks are known to introduce translation artifacts
+\citep{isbister2020swedish}, and our two-translator-plus-adjudicator
+pipeline with a human spot-check reduces but does not eliminate that risk.
+No $\gamma$ in our search grid resolves \texttt{multilingual-e5}'s collapse
+guard.
 
 \textbf{Future work.} Wire a real Hebrew STS guard into \texttt{projection}'s
 $\gamma$-selection. Extend the probe with a fourth sentence per item to
