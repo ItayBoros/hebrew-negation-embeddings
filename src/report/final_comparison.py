@@ -20,10 +20,21 @@ each left its numbers in its own file:
                                     selection is unsafe without it).
 
 This script does not compute anything new. It picks, per model, the single
-projection row that would actually be reported (the constrained row with the
-highest cosine_gap -- "best under the constraint", not "best full stop"), and
-lines it up next to the other two so the report's results section has one
-table instead of three files to cross-reference by hand.
+projection row that would actually be reported: among the 8 (direction x
+centering x cv/train) configurations satisfying the sim_unrelated <= 0.5
+constraint, the one with the highest pairwise accuracy -- "best under the
+constraint", not "best full stop" -- and lines it up next to the other two
+so the report's results section has one table instead of three files to
+cross-reference by hand.
+
+Note: within a single configuration, gamma itself is still chosen by
+argmax-cosine-gap under the constraint (that selection already happened
+upstream, in projection.py, before this script ever sees the row). This
+script's own choice is a second, separate one: which of the 8 already-fit
+configurations to headline for a given model, and that choice is made by
+accuracy, to match how the rest of the report (baseline, nli_rerank)
+reports headline numbers. See report/main.tex Section 2.4 for both rules
+stated together.
 
     python -m src.report.final_comparison
     python -m src.report.final_comparison --out results/final_comparison.csv
@@ -62,13 +73,19 @@ def load_nli_rows(path: Path) -> Dict[str, Dict[str, dict]]:
 
 def best_constrained_projection(path: Path, unrel_threshold: str = "0.5") -> Dict[str, dict]:
     """model -> the projection_ablation.csv row with config ending
-    '/constrain<=<threshold>' that has the highest cosine_gap for that model.
+    '/constrain<=<threshold>' that has the highest pairwise accuracy
+    (nevir_rank) for that model.
 
-    Mirrors what `describe()` / the report would actually cite: the
-    constrained selection's own winner, not the unconstrained (collapsed) one
-    and not a hand-picked config. If every constrained row for a model has
-    constraint_relaxed=True (multilingual-e5, at threshold 0.5), the picked
-    row is still the best gap among them, but it is flagged.
+    Mirrors what `describe()` / the report would actually cite: among the 8
+    (direction x centering x cv/train) configurations, each already
+    gamma-selected upstream by argmax-cosine-gap under the sim_unrelated
+    constraint, this picks the one with the highest pairwise accuracy --
+    not the unconstrained (collapsed) one, and not the highest-gap
+    configuration either, since gap and accuracy do not always agree across
+    configurations (see report/main.tex Section 2.4). If every constrained
+    row for a model has constraint_relaxed=True (multilingual-e5, at
+    threshold 0.5), the picked row is still the best accuracy among them,
+    but it is flagged.
     """
     suffix = f"/constrain<={unrel_threshold}"
     best: Dict[str, dict] = {}
@@ -76,8 +93,8 @@ def best_constrained_projection(path: Path, unrel_threshold: str = "0.5") -> Dic
         for row in csv.DictReader(f):
             if row["model"] not in MODELS or not row["config"].endswith(suffix):
                 continue
-            gap = _f(row["cosine_gap"])
-            if row["model"] not in best or gap > _f(best[row["model"]]["cosine_gap"]):
+            acc = _f(row["nevir_rank"])
+            if row["model"] not in best or acc > _f(best[row["model"]]["nevir_rank"]):
                 best[row["model"]] = row
     return best
 
