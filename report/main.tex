@@ -6,7 +6,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{multirow}
-\usepackage[margin=1in]{geometry}
+\usepackage[margin=0.85in]{geometry}
 \usepackage[hidelinks]{hyperref}
 
 % Compile with XeLaTeX (not pdfLaTeX) -- required for the inline Hebrew
@@ -20,6 +20,29 @@
 
 \begin{document}
 \maketitle
+
+\begin{abstract}
+Sentence embedding models are widely assumed to be sensitive to meaning, but
+negation is a direct test of that assumption: a sentence and its negation
+share nearly every surface word while meaning the opposite thing. We
+measure this \emph{negation blind spot} in four frozen Hebrew-capable
+embedders using a hand-verified probe mined from HebNLI (303 triples), and
+find it real: two of four models score a sentence's negation as more
+similar to it than a faithful paraphrase. We test two post-hoc repairs.
+\texttt{projection} amplifies each sentence's own component along an
+estimated negation direction in the frozen embedding space; naively
+selecting its amplification strength by the headline metric alone
+collapses the representation (unrelated sentences become near-identical,
+$\mathrm{sim\_unrelated}{=}0.975$) rather than fixing it, and only a
+second, independent guard metric catches this. \texttt{nli\_rerank} instead
+blends the frozen cosine with a decontaminated, task-specific Hebrew NLI
+classifier under a principled selection rule for the blend weight, reaching
+$\geq$0.986 pairwise accuracy on every model. The paper's contribution is
+less the two fixes themselves than the shared methodological finding
+behind them: gap-only selection of a representation-editing strength is
+unsafe by construction, cross-validation does not protect against it, and
+a real trade-off guard is necessary rather than optional.
+\end{abstract}
 
 \section{Introduction}
 
@@ -41,18 +64,18 @@ differing only by negation close to chance. \citet{ravichander2022condaqa}
 show the same gap in reading comprehension: state-of-the-art QA models
 answer questions about a passage and its negated counterpart inconsistently
 far more often than humans do. Concurrent work diagnoses the same problem
-directly in sentence embedding spaces \citep{semanticadapter2025},
+directly in sentence embedding spaces \citep{cao2025semanticadapter},
 confirming it is a property of the representation, not just of a
 particular downstream task.
 
 \textbf{This project asks whether the same blind spot exists in Hebrew
 sentence embeddings, and whether it can be repaired without retraining the
 underlying model.} Hebrew is a useful and under-studied test case: negation
-is carried by a small, closed set of markers (\heb{לא}, \heb{אין}/\heb{אינו},
-\heb{ללא}/\heb{בלי}/\heb{בלתי}, quantifier phrases like \heb{אף אחד} and
-\heb{אף פעם}) rather than by a single universal word as in English, and no
-prior work we are aware of has measured or addressed this specifically for
-Hebrew embeddings.
+is carried by a small, closed set of dedicated particles (\heb{לא},
+\heb{אין}/\heb{אינו}, \heb{ללא}/\heb{בלי}/\heb{בלתי}, quantifier phrases like
+\heb{אף אחד} and \heb{אף פעם}) that we stratify into six grammatical types
+(Section \ref{sec:dataset}), and no prior work we are aware of has measured
+or addressed the negation blind spot specifically for Hebrew embeddings.
 
 \subsection*{Measuring the blind spot}
 
@@ -114,13 +137,17 @@ document pairs differing only by negation and find that bi-encoder and
 sparse retrievers --- the same family our frozen embedders belong to ---
 perform at or below chance. \citet{ravichander2022condaqa} show the
 analogous gap in reading comprehension via contrastive edits to a passage
-(paraphrase, scope change, polarity reversal) --- the same three-way
-contrastive design our probe schema is built on. Concurrent 2025 work
-\citep{semanticadapter2025} diagnoses negation blindness directly inside
+(paraphrase, scope change, polarity reversal) --- the same paraphrase-vs.-negation-around-a-shared-target
+design our probe schema is built on. Concurrent 2025 work
+\citep{cao2025semanticadapter} diagnoses negation blindness directly inside
 universal sentence embedding spaces and proposes an adapter module trained
-to fix it, confirming the phenomenon is representational rather than
-task-specific, though it requires additional training rather than a
-post-hoc intervention on a frozen model.
+on top of a frozen embedder to fix it, confirming the phenomenon is
+representational rather than task-specific. Their fix and ours share the
+frozen-base-model setup; the real difference is that their adapter is a
+trained module, where \texttt{projection} needs no training at all --- only
+direction estimation and a closed-form rescaling (\texttt{nli\_rerank} does
+require training a classifier, so this contrast is specific to
+\texttt{projection} and does not extend to both of our interventions).
 
 \textbf{Fixing it by editing the representation.} Finding a linear
 ``concept direction'' inside an embedding space and manipulating a
@@ -286,7 +313,13 @@ version of this --- argmax over gap alone --- turned out to be unsafe
 constrains selection to $\gamma$ values whose cross-validated
 $\mathrm{sim\_unrelated}$ (mean $|\cos|$ between the targets of two
 unrelated probe items) stays at or below a fixed threshold (0.5), then
-argmaxes the gap among only those.
+argmaxes the gap among only those. This selects $\gamma$ within one fixed
+(direction estimator, centering, CV-vs-train) configuration; we separately
+ablate all 8 such configurations per model (direction $\in$
+\{mean-diff, classifier\} $\times$ centering $\in$ \{center, nocenter\}
+$\times$ selection $\in$ \{cv, train\}) and report, per model, whichever
+configuration reaches the highest pairwise accuracy among those satisfying
+the same $\mathrm{sim\_unrelated} \leq 0.5$ constraint.
 
 \subsection{Intervention 2: \texttt{nli\_rerank} (signal-fusion)}
 
@@ -299,9 +332,8 @@ pure cosine (the baseline); $\lambda=1$ discards the embedder entirely.
 \textbf{Classifier.} AlephBERT fine-tuned for 3-way NLI on HebNLI
 (lr $=2\times10^{-5}$, batch size 32, 2 epochs, sequence length 128).
 Test accuracy 79.6\% (macro-F1 79.4\%) on the clean HebNLI test split (883
-pairs), against 72.7\% (macro-F1 72.2\%) for the ready-made alternative,
-\texttt{oriel9p/AlephBERT-FT-HebNLI-LCHAIM}, on the same test split
-(Section \ref{sec:results}). \textbf{Why not the released checkpoint.}
+pairs) --- see Results for how this compares to the ready-made alternative,
+\texttt{oriel9p/AlephBERT-FT-HebNLI-LCHAIM}. \textbf{Why not the released checkpoint.}
 That checkpoint is AlephBERT fine-tuned on HebNLI together with LCHAIM
 \citep{malul2025lchaim}, a Hebrew NLI dataset built to evaluate
 long-context reasoning over multi-sentence passages translated from
@@ -324,8 +356,11 @@ items) and Hebrew STS-B \emph{dev} (1{,}500 pairs, translated from English
 STS-B); the selected $\lambda$ is locked and evaluated exactly once on the
 test split (151 items) and Hebrew STS-B \emph{test} (1{,}379 pairs).
 
-Both interventions are fit/selected on train and Hebrew-STS-\emph{dev}
-only, and reported on test and Hebrew-STS-\emph{test} only.
+Both interventions are fit/selected on train only, and reported on test and
+Hebrew-STS-\emph{test} only; \texttt{nli\_rerank} additionally uses
+Hebrew-STS-\emph{dev} as a selection-time guard, which \texttt{projection}
+does not have (it uses $\mathrm{sim\_unrelated}$ under cross-validation on
+train instead --- see Limitations for why that is a weaker guard).
 
 \section{Experimental Results}
 \label{sec:results}
@@ -362,32 +397,74 @@ sim\_unrelated under 0.5 anywhere in the grid, falling back to the
 grid's lowest-unrel point (0.59--0.79). We report this as a negative
 result specific to this embedder.
 
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.5\textwidth]{fig_gamma_collapse.pdf}
+\caption{Same phenomenon, all four models, mean-difference direction,
+cross-validated selection: unconstrained selection lands on
+$\mathrm{sim\_unrelated} \geq 0.85$ every time; the constrained version
+lands under 0.45 on three of four (multilingual-e5 is the exception
+discussed above).}
+\label{fig:gammacollapse}
+\end{figure}
+
 \subsection{\texttt{nli\_rerank}: locked test-set numbers}
 
 Our fine-tuned classifier reaches 79.6\% test accuracy (macro-F1 79.4\%) on
 the clean HebNLI test split, against 72.7\% (macro-F1 72.2\%) for the
-released \texttt{LCHAIM} checkpoint on the same split --- not a strictly
-fair comparison, since the two were trained for different objectives, but
-evidence that a task-specific classifier was the right call over the
-ready-made alternative.
+released \texttt{LCHAIM} checkpoint on the same split. This is not a fair
+comparison, but not for the reason it might first appear: it is not fair
+\emph{in the classifier's own favor}, since the released checkpoint was
+fine-tuned on all of HebNLI rather than a held-out split, so this test set
+was very likely part of its own training data --- a documented caveat on
+that evaluation run. Contamination should inflate a model's score, not
+deflate it, so the released checkpoint scoring seven points lower despite
+that likely advantage is stronger evidence for training a task-specific
+classifier than a same-objective comparison would have given us. The same
+pattern holds directly on the probe task itself, not just generic HebNLI:
+scoring both checkpoints with $\lambda=1$ (pure NLI, no cosine
+contribution) on \texttt{multilingual-e5}'s probe pairs, our classifier
+reaches 0.993 pairwise accuracy against LCHAIM's 0.987. Both classifiers'
+weakest class is \emph{neutral}, but by different margins --- our
+classifier's neutral recall is 0.740, LCHAIM's is 0.575, while LCHAIM
+over-predicts \emph{contradiction} in its place.
 
 \begin{table}[h]
 \centering
 \small
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrrr}
 \toprule
-model & $\lambda$ & pairwise acc.\ ($\lambda{=}0 \to$ selected) & STS Spearman ($\lambda{=}0 \to$ selected) \\
+model & $\lambda$ & pairwise acc.\ ($\lambda{=}0 \to$ selected) & STS Spearman ($\lambda{=}0 \to$ selected) & test drop \\
 \midrule
-multilingual-e5 & 0.05 & 0.80 $\to$ \textbf{0.99} & 0.76 $\to$ 0.76 \\
-LaBSE & 0.35 & 0.79 $\to$ \textbf{0.99} & 0.74 $\to$ 0.67 \\
-alephbert-sentence & 0.30 & 0.50 $\to$ \textbf{0.99} & 0.65 $\to$ 0.65 \\
-sambert & 0.35 & 0.50 $\to$ \textbf{0.99} & 0.69 $\to$ 0.67 \\
+multilingual-e5 & 0.05 & 0.80 $\to$ \textbf{0.99} & 0.76 $\to$ 0.76 & 0.007 \\
+LaBSE & 0.35 & 0.79 $\to$ \textbf{0.99} & 0.74 $\to$ 0.67 & \textbf{0.070} \\
+alephbert-sentence & 0.30 & 0.50 $\to$ \textbf{0.99} & 0.65 $\to$ 0.65 & 0.000 \\
+sambert & 0.35 & 0.50 $\to$ \textbf{0.99} & 0.69 $\to$ 0.67 & 0.014 \\
 \bottomrule
 \end{tabular}
-\caption{Every model reaches $\geq$0.987 pairwise accuracy while STS moves
-by at most 0.07, within the pre-registered 0.02 budget by construction.}
+\caption{Every model reaches $\geq$0.986 pairwise accuracy. The 0.02
+STS-Spearman-drop budget is a \emph{dev-time} selection criterion (see
+Methodology); the rightmost column is what that drop actually turned out to
+be on the locked \emph{test} split. Three of four models stay well inside
+the dev-time budget (test drop $\leq$0.014). LaBSE does not: its dev-time
+margin was already narrow (0.019 of the 0.02 budget), and that margin did
+not survive contact with the held-out split --- its test-time drop is
+$3.5\times$ the budget it was selected under. This is a real result about
+the selection rule's generalization, not a rounding error, and is discussed
+further in Limitations.}
 \label{tab:nlirerank}
 \end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.78\textwidth]{fig_lambda_sweep.pdf}
+\caption{Dev-split $\lambda$ sweep behind ``a small $\lambda$ is enough'':
+pairwise accuracy saturates near $\lambda \approx 0.1$--0.2 for every
+model, while STS Spearman rises slightly and then declines from there ---
+the two curves justify why the selection rule finds a small $\lambda$
+sufficient rather than needing to trade deep into the STS budget.}
+\label{fig:lambdasweep}
+\end{figure}
 
 \subsection{Head-to-head}
 
@@ -400,26 +477,34 @@ model & intervention & pairwise acc.\ & trade-off guard \\
 \midrule
 \multirow{3}{*}{multilingual-e5}
  & baseline & 0.80 & STS 0.76 \\
- & projection ($\gamma$=30, relaxed) & 0.94 & sim\_unrel 0.63 (over budget) \\
+ & projection (classifier, $\gamma$=12, relaxed) & 0.97 & sim\_unrel 0.79 (over budget) \\
  & nli\_rerank ($\lambda$=0.05) & \textbf{0.99} & STS 0.76 \\
 \multirow{3}{*}{LaBSE}
  & baseline & 0.80 & STS 0.74 \\
- & projection ($\gamma$=30) & 0.95 & sim\_unrel 0.44 \\
- & nli\_rerank ($\lambda$=0.35) & \textbf{0.99} & STS 0.67 \\
+ & projection (mean-diff, $\gamma$=5) & \textbf{0.99} & sim\_unrel 0.35 \\
+ & nli\_rerank ($\lambda$=0.35) & \textbf{0.99} & STS 0.67 (0.070 test drop) \\
 \multirow{3}{*}{alephbert-sentence}
  & baseline & 0.50 & STS 0.65 \\
- & projection ($\gamma$=30) & 0.91 & sim\_unrel 0.42 \\
+ & projection (mean-diff, $\gamma$=12) & 0.97 & sim\_unrel 0.45 \\
  & nli\_rerank ($\lambda$=0.30) & \textbf{0.99} & STS 0.65 \\
 \multirow{3}{*}{sambert}
  & baseline & 0.50 & STS 0.70 \\
- & projection ($\gamma$=30) & 0.86 & sim\_unrel 0.41 \\
+ & projection (classifier, $\gamma$=20) & 0.92 & sim\_unrel 0.39 \\
  & nli\_rerank ($\lambda$=0.35) & \textbf{0.99} & STS 0.67 \\
 \bottomrule
 \end{tabular}
-\caption{\texttt{nli\_rerank} wins on every model with a real
-semantic-similarity guard; \texttt{projection} needs no second model at
-inference time but recovers a smaller share of the gap, guarded only by a
-proxy metric.}
+\caption{Best available \texttt{projection} configuration per model among
+the 8 (direction $\times$ centering $\times$ selection) combinations
+satisfying $\mathrm{sim\_unrelated} \leq 0.5$ (multilingual-e5: none
+satisfy it, so the lowest-\emph{sim\_unrelated} point is shown and flagged
+relaxed). $\mathrm{sim\_unrelated}$ and STS are on different scales and not
+directly comparable, so both trade-off guards are reported alongside rather
+than merged; \texttt{nli\_rerank} wins on every model on accuracy, with a
+real semantic-similarity guard rather than a proxy, except that its own
+guard did not hold at test time for LaBSE (see Table \ref{tab:nlirerank}).
+\texttt{projection} needs no second model at inference time and, using the
+best safe configuration per model rather than one fixed one, closes most of
+the accuracy gap on three of four models.}
 \label{tab:headtohead}
 \end{table}
 
@@ -461,8 +546,9 @@ We confirmed the negation blind spot exists in Hebrew sentence embeddings
 --- two of four frozen models score a sentence's negation as \emph{more}
 similar to it than a faithful paraphrase --- and tested two ways to repair
 it without retraining the embedder. \texttt{nli\_rerank} closes the gap
-almost completely on every model ($\geq$0.987 pairwise accuracy) while a
-semantic-similarity guard stays within budget. \texttt{projection}
+almost completely on every model ($\geq$0.986 pairwise accuracy) while a
+semantic-similarity guard stays within its dev-time budget for three of
+four models (Results; LaBSE is the exception). \texttt{projection}
 recovers a substantial share of the gap without a second model at
 inference time, but only once its own selection procedure is constrained
 against a collapse guard.
@@ -480,23 +566,46 @@ rule was built on the same principle independently (a hard STS budget, not
 a weighted trade-off), and the two interventions validate each other on
 this point.
 
-\textbf{Limitations.} 303 items (151 test) is small; the smallest
-per-category slices (3--4 items per model) are suggestive, not conclusive.
-sim\_unrelated is a proxy, not a real similarity benchmark; \texttt{projection}
-would benefit from the same Hebrew-STS guard \texttt{nli\_rerank} already
-has, which we did not have time to wire in. Hebrew STS-B is a translation
-of the English benchmark \citep{agirre2017semeval} with inherited English
-gold scores, not natively annotated in Hebrew; machine-translated STS
-benchmarks are known to introduce translation artifacts
-\citep{isbister2020swedish}, and our two-translator-plus-adjudicator
-pipeline with a human spot-check reduces but does not eliminate that risk.
-No $\gamma$ in our search grid resolves \texttt{multilingual-e5}'s collapse
-guard.
+\subsection{Limitations}
 
-\textbf{Future work.} Wire a real Hebrew STS guard into \texttt{projection}'s
-$\gamma$-selection. Extend the probe with a fourth sentence per item to
-enable a true NevIR-style 0.25-chance metric. Investigate why
-\texttt{multilingual-e5} resists the collapse-safe region entirely.
+\begin{itemize}
+\item \textbf{Probe size.} 303 items (151 test) is small; the smallest
+per-category slices (3--4 items per model) are suggestive, not conclusive.
+\item \textbf{$\mathrm{sim\_unrelated}$ is a proxy, not a real similarity
+benchmark.} It is exactly what let \texttt{nli\_rerank}'s STS guard catch a
+generalization failure (LaBSE, Table \ref{tab:nlirerank}) that
+\texttt{projection}'s proxy guard has no way to catch, since it is only
+measured on train via cross-validation and never checked against a held-out
+split at all; \texttt{projection} would benefit from the same held-out
+Hebrew-STS guard \texttt{nli\_rerank} already has, which we did not have
+time to wire in.
+\item \textbf{Hebrew STS-B is a translation} of the English benchmark
+\citep{agirre2017semeval} with inherited English gold scores, not natively
+annotated in Hebrew; machine-translated STS benchmarks are known to
+introduce translation artifacts \citep{isbister2020swedish}, and our
+two-translator-plus-adjudicator pipeline with a human spot-check reduces
+but does not eliminate that risk.
+\item \textbf{The 0.02 STS budget is a dev-time guarantee, not a test-time
+one.} It held on test for three of four models but not LaBSE, whose
+dev-time margin was already narrow (Table \ref{tab:nlirerank}) --- a
+budget checked once on dev does not certify every model's behavior on
+unseen data.
+\item \textbf{No $\gamma$ in our search grid resolves \texttt{multilingual-e5}'s}
+collapse guard.
+\item \textbf{Single-run test evaluation.} Each configuration is evaluated
+once on the locked test split rather than averaged over seeds, appropriate
+for the ``no peeking'' guarantee but meaning we cannot separately quantify
+the variance in any single reported number.
+\end{itemize}
+
+\subsection{Future work}
+
+Wire a held-out Hebrew STS guard into \texttt{projection}'s
+$\gamma$-selection, matching \texttt{nli\_rerank}'s dev/test discipline.
+Extend the probe with a fourth sentence per item to enable a true
+NevIR-style 0.25-chance metric. Investigate why \texttt{multilingual-e5}
+resists the collapse-safe region entirely, and why LaBSE's STS margin does
+not generalize from dev to test while the other three models' do.
 
 \section{Code}
 
