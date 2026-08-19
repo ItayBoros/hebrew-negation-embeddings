@@ -333,7 +333,9 @@ pure cosine (the baseline); $\lambda=1$ discards the embedder entirely.
 (lr $=2\times10^{-5}$, batch size 32, 2 epochs, sequence length 128).
 Test accuracy 79.6\% (macro-F1 79.4\%) on the clean HebNLI test split (883
 pairs) --- see Results for how this compares to the ready-made alternative,
-\texttt{oriel9p/AlephBERT-FT-HebNLI-LCHAIM}. \textbf{Why not the released checkpoint.}
+\texttt{oriel9p/AlephBERT-FT-HebNLI-LCHAIM}. Checkpoint:
+\url{https://huggingface.co/CodingBz/alephbert-hebnli-clean}.
+\textbf{Why not the released checkpoint.}
 That checkpoint is AlephBERT fine-tuned on HebNLI together with LCHAIM
 \citep{malul2025lchaim}, a Hebrew NLI dataset built to evaluate
 long-context reasoning over multi-sentence passages translated from
