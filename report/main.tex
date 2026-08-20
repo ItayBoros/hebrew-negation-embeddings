@@ -528,28 +528,29 @@ exception.}
 \toprule
 category & $n$ ($\times$4 models) & baseline pass rate & projection pass rate & gap closed \\
 \midrule
-particle (\heb{לא}) & 356 & 0.67 & 0.92 & 76\% \\
-existential (\heb{אין}) & 100 & 0.65 & 0.94 & 83\% \\
-quantifier & 108 & 0.61 & 0.93 & 82\% \\
-question & 16 & 0.25 & 0.81 & 75\% \\
-privative & 12 & 0.75 & 0.83 & 32\% \\
-neg-raising & 12 & 0.83 & 0.92 & 53\% \\
+particle (\heb{לא}) & 356 & 0.67 & 0.96 & 87\% \\
+existential (\heb{אין}) & 100 & 0.65 & 0.95 & 86\% \\
+quantifier & 108 & 0.61 & 0.94 & 86\% \\
+question & 16 & 0.25 & 0.75 & 67\% \\
+privative & 12 & 0.75 & 1.00 & 100\% \\
+neg-raising & 12 & 0.83 & 1.00 & 100\% \\
 \bottomrule
 \end{tabular}
 \caption{Per-category pass rate, aggregated across all four models,
-baseline vs.\ \texttt{projection}.}
+baseline vs.\ \texttt{projection} (the same fixed default configuration as
+Table \ref{tab:headtohead}, not a per-model best-of-8 pick).}
 \label{tab:percategory}
 \end{table}
 
 The three largest categories --- particle, existential, quantifier,
 together 89\% of the test items --- all see \texttt{projection} close
-roughly 75--83\% of the baseline gap; \texttt{question} recovers similarly
-despite the lowest starting point of any category. The two categories
-where \texttt{projection} struggles most in relative terms are the two
-smallest and linguistically most specific: privative and neg-raising close
-only 32\% and 53\% of their gaps. Both are low-$n$ enough (12 items across
-all four models combined) that this reads as a real but uncertain signal
-rather than a confident per-category claim.
+roughly 86--87\% of the baseline gap. \texttt{question} (16 items) recovers
+the least in relative terms, 67\%, despite a mid-range starting point.
+\texttt{privative} and \texttt{neg-raising} (12 items combined) each close
+100\% of their gap, but at 3 items per model that is as plausibly a
+small-$n$ ceiling effect as genuine ease --- the same low-$n$ caveat as
+before, just cutting the other way: this reads as a real but uncertain
+signal, not a confident claim that these categories are easiest.
 
 \section{Discussion}
 
