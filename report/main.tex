@@ -6,7 +6,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{multirow}
-\usepackage[margin=0.85in]{geometry}
+\usepackage[margin=0.8in]{geometry}
 \usepackage[hidelinks]{hyperref}
 
 % Compile with XeLaTeX (not pdfLaTeX) -- required for the inline Hebrew
@@ -317,9 +317,14 @@ argmaxes the gap among only those. This selects $\gamma$ within one fixed
 (direction estimator, centering, CV-vs-train) configuration; we separately
 ablate all 8 such configurations per model (direction $\in$
 \{mean-diff, classifier\} $\times$ centering $\in$ \{center, nocenter\}
-$\times$ selection $\in$ \{cv, train\}) and report, per model, whichever
-configuration reaches the highest pairwise accuracy among those satisfying
-the same $\mathrm{sim\_unrelated} \leq 0.5$ constraint.
+$\times$ selection $\in$ \{cv, train\}) as a sensitivity check
+(\texttt{results/projection\_ablation.csv}), but do not headline the best
+of the 8 per model: each row's accuracy is itself a test-split number, so
+picking per model whichever scores highest would be test-set selection
+across 8 candidates. We report one configuration instead, fixed in advance
+and applied identically to every model: mean-diff direction, centered,
+$\gamma$ by cross-validation --- \texttt{NegationProjection}'s own
+defaults.
 
 \subsection{Intervention 2: \texttt{nli\_rerank} (signal-fusion)}
 
@@ -479,7 +484,7 @@ model & intervention & pairwise acc.\ & trade-off guard \\
 \midrule
 \multirow{3}{*}{multilingual-e5}
  & baseline & 0.80 & STS 0.76 \\
- & projection (classifier, $\gamma$=12, relaxed) & 0.97 & sim\_unrel 0.79 (over budget) \\
+ & projection (mean-diff, $\gamma$=12, relaxed) & 0.97 & sim\_unrel 0.78 (over budget) \\
  & nli\_rerank ($\lambda$=0.05) & \textbf{0.99} & STS 0.76 \\
 \multirow{3}{*}{LaBSE}
  & baseline & 0.80 & STS 0.74 \\
@@ -491,22 +496,26 @@ model & intervention & pairwise acc.\ & trade-off guard \\
  & nli\_rerank ($\lambda$=0.30) & \textbf{0.99} & STS 0.65 \\
 \multirow{3}{*}{sambert}
  & baseline & 0.50 & STS 0.70 \\
- & projection (classifier, $\gamma$=20) & 0.92 & sim\_unrel 0.39 \\
+ & projection (mean-diff, $\gamma$=12) & 0.88 & sim\_unrel 0.35 \\
  & nli\_rerank ($\lambda$=0.35) & \textbf{0.99} & STS 0.67 \\
 \bottomrule
 \end{tabular}
-\caption{Best available \texttt{projection} configuration per model among
-the 8 (direction $\times$ centering $\times$ selection) combinations
-satisfying $\mathrm{sim\_unrelated} \leq 0.5$ (multilingual-e5: none
-satisfy it, so the lowest-\emph{sim\_unrelated} point is shown and flagged
-relaxed). $\mathrm{sim\_unrelated}$ and STS are on different scales and not
-directly comparable, so both trade-off guards are reported alongside rather
-than merged; \texttt{nli\_rerank} wins on every model on accuracy, with a
-real semantic-similarity guard rather than a proxy, except that its own
-guard did not hold at test time for LaBSE (see Table \ref{tab:nlirerank}).
-\texttt{projection} needs no second model at inference time and, using the
-best safe configuration per model rather than one fixed one, closes most of
-the accuracy gap on three of four models.}
+\caption{\texttt{projection}'s own default configuration (mean-difference
+direction, centered, cross-validated $\gamma$), constrained to
+$\mathrm{sim\_unrelated} \leq 0.5$, applied identically to all four models
+--- not the best of the 8 direction/centering/selection combinations we
+separately ablate (Section \ref{sec:results}), since picking per model
+whichever of those scores highest on test would itself be test-set
+selection (multilingual-e5: the constraint is unsatisfiable here, so the
+lowest-\emph{sim\_unrelated} point is shown, flagged relaxed).
+$\mathrm{sim\_unrelated}$ and STS are on different scales and not directly
+comparable, so both guards are reported alongside rather than merged;
+\texttt{nli\_rerank} wins on every model on accuracy, with a real
+semantic-similarity guard rather than a proxy, except that its own guard
+did not hold at test time for LaBSE (Table \ref{tab:nlirerank}).
+\texttt{projection} needs no second model at inference time and closes
+most of the accuracy gap on three of four models, sambert being the
+exception.}
 \label{tab:headtohead}
 \end{table}
 

@@ -20,21 +20,22 @@ each left its numbers in its own file:
                                     selection is unsafe without it).
 
 This script does not compute anything new. It picks, per model, the single
-projection row that would actually be reported: among the 8 (direction x
-centering x cv/train) configurations satisfying the sim_unrelated <= 0.5
-constraint, the one with the highest pairwise accuracy -- "best under the
-constraint", not "best full stop" -- and lines it up next to the other two
-so the report's results section has one table instead of three files to
-cross-reference by hand.
+projection row that would actually be reported: the module's own default
+configuration (direction=mean_diff, center=True, select=cv), constrained to
+sim_unrelated <= 0.5, applied identically to all four models.
 
-Note: within a single configuration, gamma itself is still chosen by
-argmax-cosine-gap under the constraint (that selection already happened
-upstream, in projection.py, before this script ever sees the row). This
-script's own choice is a second, separate one: which of the 8 already-fit
-configurations to headline for a given model, and that choice is made by
-accuracy, to match how the rest of the report (baseline, nli_rerank)
-reports headline numbers. See report/main.tex Section 2.4 for both rules
-stated together.
+IMPORTANT -- this used to argmax over the 8 (direction x centering x
+cv/train) configurations, first by cosine_gap and later by pairwise
+accuracy. Both versions were wrong the same way: picking, per model,
+whichever of 8 configurations scored best *on the test split itself* is
+test-set selection across hypotheses, not a locked evaluation of one
+method -- the same category of problem as the unconstrained-gamma collapse
+this project's whole guard-metric argument is about, just one level up (see
+report/main.tex Section 2.4 and the Discussion). Fixed by hard-coding the
+selection to one configuration -- the constructor's own defaults -- decided
+without looking at any test number, applied the same way to every model.
+The full 8-way ablation is still available in results/projection_ablation.csv
+as a sensitivity check; it is not used to pick the headline row.
 
     python -m src.report.final_comparison
     python -m src.report.final_comparison --out results/final_comparison.csv
@@ -72,30 +73,29 @@ def load_nli_rows(path: Path) -> Dict[str, Dict[str, dict]]:
 
 
 def best_constrained_projection(path: Path, unrel_threshold: str = "0.5") -> Dict[str, dict]:
-    """model -> the projection_ablation.csv row with config ending
-    '/constrain<=<threshold>' that has the highest pairwise accuracy
-    (nevir_rank) for that model.
+    """model -> the projection_ablation.csv row for the single fixed
+    configuration 'mean_diff/cv/constrain<=<threshold>' (direction=mean_diff,
+    center=True, select=cv -- NegationProjection's own constructor defaults).
 
-    Mirrors what `describe()` / the report would actually cite: among the 8
-    (direction x centering x cv/train) configurations, each already
-    gamma-selected upstream by argmax-cosine-gap under the sim_unrelated
-    constraint, this picks the one with the highest pairwise accuracy --
-    not the unconstrained (collapsed) one, and not the highest-gap
-    configuration either, since gap and accuracy do not always agree across
-    configurations (see report/main.tex Section 2.4). If every constrained
-    row for a model has constraint_relaxed=True (multilingual-e5, at
-    threshold 0.5), the picked row is still the best accuracy among them,
-    but it is flagged.
+    Deliberately NOT an argmax over the 8 ablated configurations by any
+    metric (gap, accuracy, ...): every one of those 8 rows' numbers is
+    computed on the test split (see projection_report.py), so picking
+    per-model among them by a test-split number is test-set selection
+    across 8 hypotheses, not a locked single-method evaluation. This
+    function instead always returns the one configuration decided in
+    advance, independent of what any of the 8 rows' test numbers say. If
+    that fixed row's own constraint could not be satisfied for a model
+    (multilingual-e5, at threshold 0.5), it is still the row returned --
+    constraint_relaxed on the row itself carries that flag, unchanged from
+    what projection.py already decided during fit.
     """
-    suffix = f"/constrain<={unrel_threshold}"
+    target_config = f"mean_diff/cv/constrain<={unrel_threshold}"
     best: Dict[str, dict] = {}
     with path.open(encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            if row["model"] not in MODELS or not row["config"].endswith(suffix):
+            if row["model"] not in MODELS or row["config"] != target_config:
                 continue
-            acc = _f(row["nevir_rank"])
-            if row["model"] not in best or acc > _f(best[row["model"]]["nevir_rank"]):
-                best[row["model"]] = row
+            best[row["model"]] = row
     return best
 
 

@@ -54,18 +54,24 @@ MODELS = ["multilingual-e5", "labse", "alephbert-sentence", "sambert"]
 
 
 def winning_projection_config(proj_path: Path, model: str, threshold: str = "0.5") -> Optional[dict]:
-    """The projection_ablation.csv row that final_comparison.py would also
-    pick: highest cosine_gap among that model's '/constrain<=<threshold>' rows.
-    Returns the fields needed to refit it, or None if no such row exists."""
-    suffix = f"/constrain<={threshold}"
-    best = None
+    """The projection_ablation.csv row for the single fixed configuration
+    'mean_diff/cv/constrain<=<threshold>' -- the same one
+    final_comparison.py now uses (direction=mean_diff, center=True,
+    select=cv: NegationProjection's own constructor defaults).
+
+    This used to argmax cosine_gap across all 8 ablated configurations per
+    model. That is test-set selection across hypotheses (every row's
+    cosine_gap in projection_ablation.csv is computed on the test split),
+    so the resulting per-category numbers in error_analysis_summary.csv
+    were inflated the same way Table 6 was before it got fixed -- see
+    final_comparison.py's module docstring. Returns the fields needed to
+    refit the fixed configuration, or None if that row is missing."""
+    target_config = f"mean_diff/cv/constrain<={threshold}"
     with proj_path.open(encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            if row["model"] != model or not row["config"].endswith(suffix):
-                continue
-            if best is None or float(row["cosine_gap"]) > float(best["cosine_gap"]):
-                best = row
-    return best
+            if row["model"] == model and row["config"] == target_config:
+                return row
+    return None
 
 
 def item_pass(score_fn, item: ProbeItem) -> bool:
